@@ -25,57 +25,98 @@ async def handle_client(websocket, path):
     try:
         async for message in websocket:
             data = json.loads(message)
+
             if data['type'] == 'register':
                 connected_clients[data['username']] = websocket
                 await db.add_user(data['username'])
-                await broadcast({'type': 'user_joined', 'username': data['username']})
+
+                # Send initial friends and friend requests, with "AI Assistant" included
+                friends = await db.get_friends(data['username'])
+                friends.append("AI Assistant")  # Ensure AI Assistant is always in the friend list
+                requests = await db.get_friend_requests(data['username'])
+
+                await websocket.send(json.dumps({
+                    'type': 'initial_data',
+                    'friends': friends,
+                    'friend_requests': requests
+                }))
+
+            elif data['type'] == 'add_friend':
+                # Attempt to add friend, notifying both users
+                result = await db.add_friend(data['from'], data['to'])
+
+                if result['status'] == 'success':
+                    recipient_socket = connected_clients.get(data['to'])
+                    if recipient_socket:
+                        await recipient_socket.send(json.dumps({
+                            'type': 'friend_request',
+                            'from': data['from'],
+                            'to': data['to']
+                        }))
+
+                    # Notify sender about request status
+                    sender_socket = connected_clients.get(data['from'])
+                    if sender_socket:
+                        await sender_socket.send(json.dumps(result))
+
+            elif data['type'] == 'accept_friend_request':
+                result = await db.accept_friend_request(data['from'], data['to'])
+
+                # Notify both users about the new friendship
+                for username in [data['from'], data['to']]:
+                    if username in connected_clients:
+                        await connected_clients[username].send(json.dumps({
+                            'type': 'friend_added',
+                            'from': data['from'],
+                            'to': data['to']
+                        }))
+
+            elif data['type'] == 'get_friends':
+                friends = await db.get_friends(data['username'])
+                friends.append("AI Assistant")  # Ensure AI Assistant is in the friend list
+
+                await websocket.send(json.dumps({
+                    'type': 'friends_list',
+                    'friends': friends
+                }))
+
             elif data['type'] == 'message':
-                await broadcast(data)
-                if data['to'] == 'AI Assistant':
+                # Check if the message is for AI Assistant
+                if data['to'] == "AI Assistant":
+                    # Generate AI response and send back
                     ai_response = await ai_assistant.get_response(data['content'])
-                    await broadcast({
+                    await websocket.send(json.dumps({
                         'type': 'message',
-                        'from': 'AI Assistant',
+                        'from': "AI Assistant",
                         'to': data['from'],
                         'content': ai_response
-                    })
-            elif data['type'] == 'add_friend':
-                # Add friend request to the database
-                await db.add_friend_request(data['from'], data['to'])
-                
-                # Send the friend request only to the specified user if they are online
-                recipient_socket = connected_clients.get(data['to'])
-                if recipient_socket:
-                    await recipient_socket.send(json.dumps({
-                        'type': 'friend_request',
-                        'from': data['from'],
-                        'to': data['to']
                     }))
-            elif data['type'] == 'accept_friend_request':
-                await db.accept_friend_request(data['from'], data['to'])
-                
-                # Notify both users if they are online
-                from_socket = connected_clients.get(data['from'])
-                to_socket = connected_clients.get(data['to'])
-                
-                if from_socket:
-                    await from_socket.send(json.dumps({
-                        'type': 'friend_added',
-                        'from': data['from'],
-                        'to': data['to']
-                    }))
-                
-                if to_socket:
-                    await to_socket.send(json.dumps({
-                        'type': 'friend_added',
-                        'from': data['from'],
-                        'to': data['to']
-                    }))
+                else:
+                    # Save and forward the message to the actual friend
+                    await db.save_message(data['from'], data['to'], data['content'])
+
+                    recipient_socket = connected_clients.get(data['to'])
+                    if recipient_socket:
+                        await recipient_socket.send(json.dumps(data))
+
+                    # Confirm to sender
+                    sender_socket = connected_clients.get(data['from'])
+                    if sender_socket:
+                        await sender_socket.send(json.dumps(data))
+
+            elif data['type'] == 'get_friend_requests':
+                requests = await db.get_friend_requests(data['username'])
+                await websocket.send(json.dumps({
+                    'type': 'friend_requests',
+                    'requests': requests
+                }))
+
+    except Exception as e:
+        print(f"Error in handle_client: {e}")
     finally:
         if websocket in connected_clients.values():
             username = [k for k, v in connected_clients.items() if v == websocket][0]
             del connected_clients[username]
-            await broadcast({'type': 'user_left', 'username': username})
 
 async def broadcast(message):
     for client in connected_clients.values():

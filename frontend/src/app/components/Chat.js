@@ -1,3 +1,4 @@
+// frontend/src/app/components/Chat.js
 import { useState, useEffect } from "react";
 
 /**
@@ -8,23 +9,41 @@ import { useState, useEffect } from "react";
  * @property {string} content
  */
 
-export default function Component({ socket, username, selectedFriend }) {
-  const [messages, setMessages] = useState([]);
+export default function Chat({ socket, username, selectedFriend }) {
   const [inputMessage, setInputMessage] = useState("");
+  const [chatHistory, setChatHistory] = useState({});
 
   useEffect(() => {
+    // Initialize chat history for selected friend
+    if (selectedFriend) {
+      setChatHistory((prev) => ({
+        ...prev,
+        [selectedFriend]: prev[selectedFriend] || [],
+      }));
+    }
+  }, [selectedFriend]);
+
+  useEffect(() => {
+    // Handle incoming messages
     if (socket) {
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (
-          data.type === "message" &&
-          (data.from === selectedFriend || data.to === selectedFriend)
-        ) {
-          setMessages((prevMessages) => [...prevMessages, data]);
+        if (data.type === "message") {
+          // Check if the message belongs to the current conversation
+          const isRelevantMessage =
+            (data.from === selectedFriend && data.to === username) ||
+            (data.from === username && data.to === selectedFriend);
+
+          if (isRelevantMessage) {
+            setChatHistory((prev) => ({
+              ...prev,
+              [selectedFriend]: [...(prev[selectedFriend] || []), data],
+            }));
+          }
         }
       };
     }
-  }, [socket, selectedFriend]);
+  }, [socket, selectedFriend, username]);
 
   const sendMessage = (e) => {
     e.preventDefault();
@@ -32,7 +51,7 @@ export default function Component({ socket, username, selectedFriend }) {
       const messageData = {
         type: "message",
         from: username,
-        to: selectedFriend,
+        to: selectedFriend, // This will be "AI Assistant" if chosen
         content: inputMessage,
       };
       socket.send(JSON.stringify(messageData));
@@ -42,24 +61,28 @@ export default function Component({ socket, username, selectedFriend }) {
 
   return (
     <div className="flex flex-col h-full">
-      <h2 className="text-xl font-bold mb-4 text-gray-300">
-        Chat with {selectedFriend}
-      </h2>
+      <div className="mb-4 p-4 bg-zinc-800 rounded-lg shadow">
+        <h2 className="text-xl font-bold text-gray-300">
+          Chat with {selectedFriend}
+        </h2>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-800 rounded-lg shadow-inner">
-        {messages.map((msg, index) => (
+        {chatHistory[selectedFriend]?.map((msg, index) => (
           <div
             key={index}
-            className={`p-2 rounded ${
+            className={`p-2 rounded max-w-[80%] ${
               msg.from === username
-                ? "bg-blue-600 text-white self-end"
-                : "bg-zinc-700 text-gray-200 self-start"
+                ? "bg-blue-600 text-white ml-auto"
+                : "bg-zinc-700 text-gray-200"
             }`}
           >
-            <p className="font-bold">{msg.from}</p>
-            <p>{msg.content}</p>
+            <p className="text-sm opacity-75 mb-1">{msg.from}</p>
+            <p className="break-words">{msg.content}</p>
           </div>
         ))}
       </div>
+
       <form onSubmit={sendMessage} className="flex mt-4">
         <input
           type="text"
