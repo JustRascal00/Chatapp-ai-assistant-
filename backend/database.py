@@ -1,4 +1,5 @@
 from pymongo import MongoClient
+from datetime import datetime
 
 class Database:
     def __init__(self, uri):
@@ -9,7 +10,7 @@ class Database:
 
     async def add_user(self, username):
         if not self.users.find_one({'username': username}):
-            self.users.insert_one({'username': username, 'friends': []})
+            self.users.insert_one({'username': username, 'friends': [], 'friend_requests': []})
 
     async def add_friend(self, user, friend):
         self.users.update_one({'username': user}, {'$addToSet': {'friends': friend}})
@@ -34,3 +35,15 @@ class Database:
                 {'from': user2, 'to': user1}
             ]
         }).sort('timestamp'))
+
+    async def add_friend_request(self, from_user, to_user):
+        self.users.update_one({'username': to_user}, {'$addToSet': {'friend_requests': from_user}})
+
+    async def accept_friend_request(self, from_user, to_user):
+        self.users.update_one({'username': from_user}, {'$pull': {'friend_requests': to_user}})
+        self.users.update_one({'username': from_user}, {'$addToSet': {'friends': to_user}})
+        self.users.update_one({'username': to_user}, {'$addToSet': {'friends': from_user}})
+
+    async def get_friend_requests(self, username):
+        user = self.users.find_one({'username': username})
+        return user.get('friend_requests', []) if user else []

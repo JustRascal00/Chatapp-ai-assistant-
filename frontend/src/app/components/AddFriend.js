@@ -1,12 +1,14 @@
 import { useState } from "react";
 
-export default function AddFriend({ socket }) {
+export default function Component({ socket, username }) {
   const [friendName, setFriendName] = useState("");
 
   const handleAddFriend = (e) => {
     e.preventDefault();
     if (friendName.trim() && socket) {
-      socket.send(JSON.stringify({ type: "add_friend", to: friendName }));
+      socket.send(
+        JSON.stringify({ type: "add_friend", from: username, to: friendName })
+      );
       setFriendName("");
     }
   };
@@ -24,7 +26,7 @@ export default function AddFriend({ socket }) {
         type="submit"
         className="w-full p-2 text-white bg-green-500 rounded hover:bg-green-600"
       >
-        Add Friend
+        Send Friend Request
       </button>
     </form>
   );

@@ -1,20 +1,30 @@
 import { useState, useEffect } from "react";
 
-export default function Chat({ socket, username }) {
+/**
+ * @typedef {Object} Message
+ * @property {string} type
+ * @property {string} from
+ * @property {string} to
+ * @property {string} content
+ */
+
+export default function Component({ socket, username, selectedFriend }) {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedFriend, setSelectedFriend] = useState("AI Assistant");
 
   useEffect(() => {
     if (socket) {
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.type === "message") {
+        if (
+          data.type === "message" &&
+          (data.from === selectedFriend || data.to === selectedFriend)
+        ) {
           setMessages((prevMessages) => [...prevMessages, data]);
         }
       };
     }
-  }, [socket]);
+  }, [socket, selectedFriend]);
 
   const sendMessage = (e) => {
     e.preventDefault();
@@ -32,6 +42,7 @@ export default function Chat({ socket, username }) {
 
   return (
     <div className="flex flex-col h-full">
+      <h2 className="text-xl font-bold mb-4">Chat with {selectedFriend}</h2>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((msg, index) => (
           <div

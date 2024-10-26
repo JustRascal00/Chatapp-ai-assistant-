@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Chat from "@/app/components/Chat";
-import FriendList from "@/app/components/FriendList";
-import AddFriend from "@/app/components/AddFriend";
+import Chat from "./components/Chat";
+import FriendList from "./components/FriendList";
+import AddFriend from "./components/AddFriend";
+import FriendRequests from "./components/FriendRequests";
 
-export default function Home() {
+export default function Component() {
   const [username, setUsername] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [selectedFriend, setSelectedFriend] = useState("AI Assistant");
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -56,11 +58,20 @@ export default function Home() {
     <div className="flex h-screen bg-gray-100">
       <div className="w-1/4 p-4 bg-white border-r">
         <h2 className="mb-4 text-xl font-bold">Friends</h2>
-        <FriendList socket={socket} />
-        <AddFriend socket={socket} />
+        <FriendList
+          socket={socket}
+          username={username}
+          onSelectFriend={setSelectedFriend}
+        />
+        <AddFriend socket={socket} username={username} />
+        <FriendRequests socket={socket} username={username} />
       </div>
       <div className="w-3/4 p-4">
-        <Chat socket={socket} username={username} />
+        <Chat
+          socket={socket}
+          username={username}
+          selectedFriend={selectedFriend}
+        />
       </div>
     </div>
   );

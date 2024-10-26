@@ -1,23 +1,46 @@
 import { useState, useEffect } from "react";
 
-export default function FriendList({ socket }) {
+/**
+ * @typedef {Object} FriendListProps
+ * @property {WebSocket|null} socket
+ * @property {string} username
+ * @property {(friend: string) => void} onSelectFriend
+ */
+
+export default function Component({ socket, username, onSelectFriend }) {
   const [friends, setFriends] = useState(["AI Assistant"]);
 
   useEffect(() => {
     if (socket) {
-      socket.onmessage = (event) => {
+      const handleMessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.type === "friend_added") {
-          setFriends((prevFriends) => [...prevFriends, data.to]);
+        if (
+          data.type === "friend_added" &&
+          (data.from === username || data.to === username)
+        ) {
+          setFriends((prevFriends) => [
+            ...prevFriends,
+            data.from === username ? data.to : data.from,
+          ]);
         }
       };
+
+      socket.addEventListener("message", handleMessage);
+
+      return () => {
+        socket.removeEventListener("message", handleMessage);
+      };
     }
-  }, [socket]);
+  }, [socket, username]);
 
   return (
     <ul className="space-y-2">
       {friends.map((friend) => (
-        <li key={friend} className="p-2 bg-gray-100 rounded">
+        <li
+          key={friend}
+          className="p-2 bg-gray-100 rounded cursor-pointer hover:bg-gray-200"
+          onClick={() => onSelectFriend(friend)}
+        >
           {friend}
         </li>
       ))}
