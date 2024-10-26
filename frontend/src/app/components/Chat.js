@@ -1,4 +1,3 @@
-// frontend/src/app/components/Chat.js
 import { useState, useEffect } from "react";
 
 /**
@@ -14,22 +13,49 @@ export default function Chat({ socket, username, selectedFriend }) {
   const [chatHistory, setChatHistory] = useState({});
 
   useEffect(() => {
-    // Initialize chat history for selected friend
     if (selectedFriend) {
       setChatHistory((prev) => ({
         ...prev,
         [selectedFriend]: prev[selectedFriend] || [],
       }));
+
+      // Ensure the WebSocket exists and is open before sending the load chat history request
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "load_chat_history",
+            from: username,
+            to: selectedFriend,
+          })
+        );
+      } else if (socket) {
+        // Add an event listener to send the request once the socket opens
+        const handleOpen = () => {
+          socket.send(
+            JSON.stringify({
+              type: "load_chat_history",
+              from: username,
+              to: selectedFriend,
+            })
+          );
+        };
+
+        socket.addEventListener("open", handleOpen);
+
+        // Clean up the event listener when the component or socket changes
+        return () => {
+          socket.removeEventListener("open", handleOpen);
+        };
+      }
     }
-  }, [selectedFriend]);
+  }, [selectedFriend, socket, username]);
 
   useEffect(() => {
-    // Handle incoming messages
     if (socket) {
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
+
         if (data.type === "message") {
-          // Check if the message belongs to the current conversation
           const isRelevantMessage =
             (data.from === selectedFriend && data.to === username) ||
             (data.from === username && data.to === selectedFriend);
@@ -40,6 +66,11 @@ export default function Chat({ socket, username, selectedFriend }) {
               [selectedFriend]: [...(prev[selectedFriend] || []), data],
             }));
           }
+        } else if (data.type === "chat_history" && data.chat) {
+          setChatHistory((prev) => ({
+            ...prev,
+            [selectedFriend]: data.chat,
+          }));
         }
       };
     }
@@ -47,11 +78,11 @@ export default function Chat({ socket, username, selectedFriend }) {
 
   const sendMessage = (e) => {
     e.preventDefault();
-    if (inputMessage.trim() && socket) {
+    if (inputMessage.trim() && socket && socket.readyState === WebSocket.OPEN) {
       const messageData = {
         type: "message",
         from: username,
-        to: selectedFriend, // This will be "AI Assistant" if chosen
+        to: selectedFriend,
         content: inputMessage,
       };
       socket.send(JSON.stringify(messageData));
