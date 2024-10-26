@@ -34,18 +34,21 @@ export default function Component() {
 
   if (!isLoggedIn) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <form onSubmit={handleLogin} className="p-6 bg-white rounded shadow-md">
+      <div className="flex items-center justify-center min-h-screen bg-zinc-900 text-gray-100">
+        <form
+          onSubmit={handleLogin}
+          className="p-6 bg-zinc-800 rounded shadow-md"
+        >
           <input
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="Enter your username"
-            className="w-full p-2 mb-4 border rounded"
+            className="w-full p-2 mb-4 border rounded bg-zinc-700 text-gray-100 placeholder-gray-400"
           />
           <button
             type="submit"
-            className="w-full p-2 text-white bg-blue-500 rounded hover:bg-blue-600"
+            className="w-full p-2 text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors"
           >
             Login
           </button>
@@ -55,9 +58,9 @@ export default function Component() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      <div className="w-1/4 p-4 bg-white border-r">
-        <h2 className="mb-4 text-xl font-bold">Friends</h2>
+    <div className="flex h-screen bg-zinc-900 text-gray-100">
+      <div className="w-1/4 p-4 bg-zinc-800 border-r border-zinc-700">
+        <h2 className="mb-4 text-xl font-bold text-gray-300">Friends</h2>
         <FriendList
           socket={socket}
           username={username}
@@ -66,7 +69,7 @@ export default function Component() {
         <AddFriend socket={socket} username={username} />
         <FriendRequests socket={socket} username={username} />
       </div>
-      <div className="w-3/4 p-4">
+      <div className="w-3/4 p-4 bg-zinc-900">
         <Chat
           socket={socket}
           username={username}

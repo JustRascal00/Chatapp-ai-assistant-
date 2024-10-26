@@ -38,7 +38,7 @@ export default function Component({ socket, username, onSelectFriend }) {
       {friends.map((friend) => (
         <li
           key={friend}
-          className="p-2 bg-gray-100 rounded cursor-pointer hover:bg-gray-200"
+          className="p-2 bg-zinc-700 rounded cursor-pointer hover:bg-zinc-600 transition-all"
           onClick={() => onSelectFriend(friend)}
         >
           {friend}
