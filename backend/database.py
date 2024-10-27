@@ -192,14 +192,16 @@ class Database:
 
     async def save_message(self, from_user, to_user, content):
         """
-        Save a message to the appropriate collection.
+        Save a message to the appropriate collection with read receipt status.
         """
         try:
             message_doc = {
                 'from': from_user,
                 'to': to_user,
                 'content': content,
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.utcnow().isoformat(),  # Store as ISO string
+                'read': False,
+                'readAt': None
             }
             
             if to_user == "AI Assistant" or from_user == "AI Assistant":
@@ -213,7 +215,35 @@ class Database:
         except Exception as e:
             logger.error(f"Error saving message: {e}")
             raise
-    
+
+    async def mark_messages_read(self, reader, sender):
+        """
+        Mark all messages from sender to reader as read.
+        Returns the number of messages marked as read.
+        """
+        try:
+            current_time = datetime.utcnow().isoformat()  # Store as ISO string
+            result = self.messages.update_many(
+                {
+                    'from': sender,
+                    'to': reader,
+                    'read': False
+                },
+                {
+                    '$set': {
+                        'read': True,
+                        'readAt': current_time
+                    }
+                }
+            )
+            return {
+                'modified_count': result.modified_count,
+                'timestamp': current_time
+            }
+        except Exception as e:
+            logger.error(f"Error marking messages as read: {e}")
+            raise
+
     async def get_messages(self, user1, user2):
         """
         Retrieve messages between two users.
@@ -226,6 +256,14 @@ class Database:
                         {'from': user2, 'to': user1}
                     ]
                 }).sort('timestamp'))
+                
+                # Convert datetime objects to ISO strings
+                for msg in messages:
+                    if isinstance(msg.get('timestamp'), datetime):
+                        msg['timestamp'] = msg['timestamp'].isoformat()
+                    if isinstance(msg.get('readAt'), datetime):
+                        msg['readAt'] = msg['readAt'].isoformat()
+                        
                 logger.info(f"Retrieved {len(messages)} AI messages")
                 return messages
                 
@@ -235,6 +273,14 @@ class Database:
                     {'from': user2, 'to': user1}
                 ]
             }).sort('timestamp'))
+            
+            # Convert datetime objects to ISO strings
+            for msg in messages:
+                if isinstance(msg.get('timestamp'), datetime):
+                    msg['timestamp'] = msg['timestamp'].isoformat()
+                if isinstance(msg.get('readAt'), datetime):
+                    msg['readAt'] = msg['readAt'].isoformat()
+                    
             logger.info(f"Retrieved {len(messages)} user messages")
             return messages
         except Exception as e:

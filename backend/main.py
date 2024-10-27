@@ -78,13 +78,11 @@ async def handle_client(websocket, path):
             try:
                 data = json.loads(message)
                 
-
                 if data['type'] == 'register':
                     client_username = data['username']
                     connected_clients[client_username] = websocket
                     await db.add_user(client_username)
                     
-
                     # Send initial data including AI Assistant
                     friends = await db.get_friends(client_username)
                     friends.append("AI Assistant")
@@ -120,7 +118,6 @@ async def handle_client(websocket, path):
                             await broadcast_to_user(username, notification)
 
                 elif data['type'] == 'message':
-        
                     if data['to'] == "AI Assistant":
                         await handle_message_to_ai(websocket, data)
                     else:
@@ -158,7 +155,10 @@ async def handle_client(websocket, path):
                             'type': 'message',
                             'from': msg['from'],
                             'to': msg['to'],
-                            'content': msg['content']
+                            'content': msg['content'],
+                            'timestamp': msg.get('timestamp'),
+                            'read': msg.get('read', False),
+                            'readAt': msg.get('readAt')
                         }
                         for msg in messages
                     ]
@@ -168,8 +168,23 @@ async def handle_client(websocket, path):
                         'chat': formatted_messages
                     }))
 
+                elif data['type'] == 'mark_messages_read':
+                    try:
+                        result = await db.mark_messages_read(data['reader'], data['sender'])
+                        if result['modified_count'] > 0:
+                            # Notify the sender that their messages were read
+                            read_receipt = {
+                                'type': 'messages_read',
+                                'reader': data['reader'],
+                                'sender': data['sender'],
+                                'timestamp': result['timestamp']  # result['timestamp'] is already an ISO string
+                            }
+                            await broadcast_to_user(data['sender'], read_receipt)
+                    except Exception as e:
+                        logger.error(f"Error handling mark_messages_read: {e}")
+
             except json.JSONDecodeError:
-                logger.error("Invalid JSON received")
+                logger.error("Invalid JSON received") 
 
     except websockets.exceptions.ConnectionClosed:
         logger.info("Client connection closed")

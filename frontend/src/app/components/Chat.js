@@ -1,17 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import { Send } from "lucide-react";
+import { Send, Check, CheckCheck } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
-
-/**
- * @typedef {Object} Message
- * @property {string} type
- * @property {string} from
- * @property {string} to
- * @property {string} content
- */
 
 export default function Chat({ socket, username, selectedFriend }) {
   const [inputMessage, setInputMessage] = useState("");
@@ -26,8 +18,17 @@ export default function Chat({ socket, username, selectedFriend }) {
         [selectedFriend]: prev[selectedFriend] || [],
       }));
 
-      // Request chat history for the selected friend
       if (socket && socket.readyState === WebSocket.OPEN) {
+        // Mark all unread messages as read when opening chat
+        socket.send(
+          JSON.stringify({
+            type: "mark_messages_read",
+            reader: username,
+            sender: selectedFriend,
+          })
+        );
+
+        // Request chat history
         socket.send(
           JSON.stringify({
             type: "load_chat_history",
@@ -53,12 +54,45 @@ export default function Chat({ socket, username, selectedFriend }) {
 
           if (!messageIds.current.has(messageId)) {
             messageIds.current.add(messageId);
+            // Ensure the message has a timestamp
+            const messageWithTimestamp = {
+              ...data,
+              timestamp: data.timestamp || new Date().toISOString(),
+            };
+
             setChatHistory((prev) => ({
               ...prev,
-              [selectedFriend]: [...(prev[selectedFriend] || []), data],
+              [selectedFriend]: [
+                ...(prev[selectedFriend] || []),
+                messageWithTimestamp,
+              ],
             }));
+
+            // If we receive a message and we're the recipient, mark it as read
+            if (
+              data.from === selectedFriend &&
+              socket.readyState === WebSocket.OPEN
+            ) {
+              socket.send(
+                JSON.stringify({
+                  type: "mark_messages_read",
+                  reader: username,
+                  sender: selectedFriend,
+                })
+              );
+            }
           }
         }
+      } else if (data.type === "messages_read") {
+        // Update read status for messages
+        setChatHistory((prev) => ({
+          ...prev,
+          [selectedFriend]: (prev[selectedFriend] || []).map((msg) => ({
+            ...msg,
+            read: msg.from === username ? true : msg.read,
+            readAt: msg.from === username ? data.timestamp : msg.readAt,
+          })),
+        }));
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
         const filteredMessages = data.chat.filter((msg) => {
@@ -66,7 +100,11 @@ export default function Chat({ socket, username, selectedFriend }) {
           const isDuplicate = messageIds.current.has(messageId);
           if (!isDuplicate) {
             messageIds.current.add(messageId);
-            return true;
+            // Ensure each message has a timestamp
+            return {
+              ...msg,
+              timestamp: msg.timestamp || new Date().toISOString(),
+            };
           }
           return false;
         });
@@ -95,6 +133,19 @@ export default function Chat({ socket, username, selectedFriend }) {
     }
   }, [chatHistory, selectedFriend]);
 
+  const formatTimestamp = (timestamp) => {
+    if (!timestamp) return "";
+    try {
+      return new Date(timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      console.error("Invalid timestamp:", timestamp);
+      return "";
+    }
+  };
+
   const sendMessage = (e) => {
     e.preventDefault();
     if (inputMessage.trim() && socket && socket.readyState === WebSocket.OPEN) {
@@ -103,6 +154,8 @@ export default function Chat({ socket, username, selectedFriend }) {
         from: username,
         to: selectedFriend,
         content: inputMessage,
+        timestamp: new Date().toISOString(),
+        read: false,
       };
 
       const messageId = `${username}-${selectedFriend}-${inputMessage}-${Date.now()}`;
@@ -119,6 +172,20 @@ export default function Chat({ socket, username, selectedFriend }) {
         setInputMessage("");
       }
     }
+  };
+
+  const getReadStatus = (message) => {
+    if (message.from !== username) return null;
+
+    if (message.read && message.readAt) {
+      return (
+        <div className="flex items-center space-x-1 text-xs text-gray-400">
+          <CheckCheck className="h-3 w-3" />
+          <span>Read {formatTimestamp(message.readAt)}</span>
+        </div>
+      );
+    }
+    return <Check className="h-3 w-3 text-gray-400" />;
   };
 
   return (
@@ -149,8 +216,14 @@ export default function Chat({ socket, username, selectedFriend }) {
                   : "bg-zinc-700 text-gray-200"
               }`}
             >
-              <p className="text-sm opacity-75 mb-1">{msg.from}</p>
+              <div className="flex justify-between items-start mb-1">
+                <p className="text-sm opacity-75">{msg.from}</p>
+                <span className="text-xs opacity-50">
+                  {formatTimestamp(msg.timestamp)}
+                </span>
+              </div>
               <p className="break-words">{msg.content}</p>
+              {getReadStatus(msg)}
             </motion.div>
           ))}
         </div>
