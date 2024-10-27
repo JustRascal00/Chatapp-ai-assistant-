@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import { User, Bot } from "lucide-react";
 
 export default function FriendList({ socket, username, onSelectFriend }) {
   const [friends, setFriends] = useState(["AI Assistant"]); // Initialize with "AI Assistant"
@@ -48,21 +50,35 @@ export default function FriendList({ socket, username, onSelectFriend }) {
   }, [socket, username, friends]);
 
   return (
-    <ul className="space-y-2">
+    <motion.ul
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="space-y-2"
+    >
       {friends.map((friend) => (
-        <li
+        <motion.li
           key={friend}
-          className="p-2 bg-zinc-700 rounded cursor-pointer hover:bg-zinc-600 transition-all flex items-center justify-between"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className="p-3 bg-zinc-700 rounded-lg cursor-pointer hover:bg-zinc-600 transition-all flex items-center justify-between"
           onClick={() => onSelectFriend(friend)}
         >
-          <span>{friend}</span>
+          <div className="flex items-center space-x-3">
+            {friend === "AI Assistant" ? (
+              <Bot className="h-5 w-5 text-blue-400" />
+            ) : (
+              <User className="h-5 w-5 text-gray-400" />
+            )}
+            <span className="text-gray-200">{friend}</span>
+          </div>
           {friend === "AI Assistant" && (
-            <span className="text-xs bg-blue-500 rounded-full px-2 py-1">
+            <span className="text-xs bg-blue-500 text-white rounded-full px-2 py-1">
               AI
             </span>
           )}
-        </li>
+        </motion.li>
       ))}
-    </ul>
+    </motion.ul>
   );
 }

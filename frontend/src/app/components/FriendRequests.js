@@ -1,4 +1,7 @@
 import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { UserCheck, Bell } from "lucide-react";
+import { Button } from "@/app/components/ui/button";
 
 export default function Component({ socket, username }) {
   const [friendRequests, setFriendRequests] = useState([]); // Ensure it's initialized as an empty array
@@ -73,35 +76,59 @@ export default function Component({ socket, username }) {
   };
 
   return (
-    <div className="mt-4">
-      <h3 className="text-lg font-semibold mb-2 text-gray-300">
-        Friend Requests ({friendRequests.length})
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="mt-6"
+    >
+      <h3 className="text-lg font-semibold mb-4 text-gray-200 flex items-center space-x-2">
+        <Bell className="h-5 w-5" />
+        <span>Friend Requests ({friendRequests.length})</span>
       </h3>
       {notification && (
-        <div className="mb-2 p-2 bg-blue-500 text-white rounded animate-fade-in">
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          className="mb-4 p-2 bg-blue-500 text-white rounded-md"
+        >
           {notification}
-        </div>
+        </motion.div>
       )}
-      {friendRequests.length === 0 ? (
-        <p className="text-gray-400">No pending friend requests</p>
-      ) : (
-        <ul className="space-y-2">
-          {friendRequests.map((requester) => (
-            <li
-              key={requester}
-              className="flex items-center justify-between p-2 bg-zinc-700 rounded"
-            >
-              <span className="text-gray-200">{requester}</span>
-              <button
-                onClick={() => handleAcceptRequest(requester)}
-                className="px-3 py-1 text-sm text-white bg-blue-500 rounded hover:bg-blue-600 transition-colors"
+      <AnimatePresence>
+        {friendRequests.length === 0 ? (
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="text-gray-400"
+          >
+            No pending friend requests
+          </motion.p>
+        ) : (
+          <ul className="space-y-2">
+            {friendRequests.map((requester) => (
+              <motion.li
+                key={requester}
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="flex items-center justify-between p-3 bg-zinc-700 rounded-lg"
               >
-                Accept
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+                <span className="text-gray-200">{requester}</span>
+                <Button
+                  onClick={() => handleAcceptRequest(requester)}
+                  className="px-3 py-1 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors flex items-center space-x-1"
+                >
+                  <UserCheck className="h-4 w-4" />
+                  <span>Accept</span>
+                </Button>
+              </motion.li>
+            ))}
+          </ul>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
