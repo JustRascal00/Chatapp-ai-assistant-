@@ -2,147 +2,194 @@ import asyncio
 import json
 import websockets
 import os
+import logging
 from dotenv import load_dotenv
 from database import Database
 from ai_assistant import AIAssistant
 from bson import ObjectId
 from datetime import datetime
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
-# Initialize db before using it
-db = Database(os.getenv('MONGODB_URI'))
+# Initialize database and AI assistant
+mongodb_uri = os.getenv('MONGODB_URI')
+if not mongodb_uri:
+    raise ValueError("MONGODB_URI environment variable is not set")
+
+db = Database(mongodb_uri)
 ai_assistant = AIAssistant(os.getenv('GEMINI_API_KEY'))
 
-# Check the MongoDB connection
-try:
-    db.client.server_info()  # This will throw an exception if the connection fails
-    print("Successfully connected to MongoDB")
-except Exception as e:
-    print(f"Error connecting to MongoDB: {e}")
-
+# Store connected clients
 connected_clients = {}
 
-# Helper function to convert ObjectId and datetime fields to strings
 def convert_object_ids_and_datetimes_to_strings(data):
     if isinstance(data, dict):
-        return {k: str(v) if isinstance(v, (ObjectId, datetime)) else v for k, v in data.items()}
+        return {k: str(v) if isinstance(v, (ObjectId, datetime)) else convert_object_ids_and_datetimes_to_strings(v) 
+                for k, v in data.items()}
     elif isinstance(data, list):
         return [convert_object_ids_and_datetimes_to_strings(item) for item in data]
     return data
 
+async def broadcast_to_user(username, message):
+    if username in connected_clients:
+        try:
+            await connected_clients[username].send(json.dumps(message))
+            return True
+        except Exception as e:
+            logger.error(f"Error broadcasting to user {username}: {e}")
+            return False
+    return False
+
+async def handle_message_to_ai(websocket, user_message_data):
+    """Handle messages specifically for AI Assistant"""
+    try:
+        # Process AI response
+        ai_response = await ai_assistant.get_response(user_message_data['content'])
+
+        # Save user's message to database
+        await db.save_message(user_message_data['from'], "AI Assistant", user_message_data['content'])
+        await db.save_message("AI Assistant", user_message_data['from'], ai_response)
+
+        # Send AI response
+        ai_message = {
+            'type': 'message',
+            'from': "AI Assistant",
+            'to': user_message_data['from'],
+            'content': ai_response
+        }
+        await websocket.send(json.dumps(ai_message))
+
+    except Exception as e:
+        logger.error(f"Error in AI message handling: {e}")
+        # Send error message back to user
+        await websocket.send(json.dumps({
+            'type': 'error',
+            'message': 'Failed to get AI response. Please try again.'
+        }))
+
 async def handle_client(websocket, path):
+    client_username = None
     try:
         async for message in websocket:
-            data = json.loads(message)
+            try:
+                data = json.loads(message)
+                
 
-            if data['type'] == 'register':
-                connected_clients[data['username']] = websocket
-                await db.add_user(data['username'])
+                if data['type'] == 'register':
+                    client_username = data['username']
+                    connected_clients[client_username] = websocket
+                    await db.add_user(client_username)
+                    
 
-                # Send initial friends and friend requests, with "AI Assistant" included
-                friends = await db.get_friends(data['username'])
-                friends.append("AI Assistant")
-                requests = await db.get_friend_requests(data['username'])
+                    # Send initial data including AI Assistant
+                    friends = await db.get_friends(client_username)
+                    friends.append("AI Assistant")
+                    requests = await db.get_friend_requests(client_username)
 
-                await websocket.send(json.dumps({
-                    'type': 'initial_data',
-                    'friends': friends,
-                    'friend_requests': requests
-                }))
+                    await websocket.send(json.dumps({
+                        'type': 'initial_data',
+                        'friends': friends,
+                        'friend_requests': requests
+                    }))
 
-            elif data['type'] == 'add_friend':
-                result = await db.add_friend(data['from'], data['to'])
-
-                if result['status'] == 'success':
-                    recipient_socket = connected_clients.get(data['to'])
-                    if recipient_socket:
-                        await recipient_socket.send(json.dumps({
+                elif data['type'] == 'add_friend':
+                    result = await db.add_friend(data['from'], data['to'])
+                    
+                    if result['status'] == 'success':
+                        await broadcast_to_user(data['to'], {
                             'type': 'friend_request',
                             'from': data['from'],
                             'to': data['to']
-                        }))
+                        })
+                        await broadcast_to_user(data['from'], result)
 
-                    sender_socket = connected_clients.get(data['from'])
-                    if sender_socket:
-                        await sender_socket.send(json.dumps(result))
-
-            elif data['type'] == 'accept_friend_request':
-                result = await db.accept_friend_request(data['from'], data['to'])
-
-                for username in [data['from'], data['to']]:
-                    if username in connected_clients:
-                        await connected_clients[username].send(json.dumps({
+                elif data['type'] == 'accept_friend_request':
+                    result = await db.accept_friend_request(data['from'], data['to'])
+                    
+                    if result['status'] == 'success':
+                        notification = {
                             'type': 'friend_added',
                             'from': data['from'],
                             'to': data['to']
-                        }))
+                        }
+                        for username in [data['from'], data['to']]:
+                            await broadcast_to_user(username, notification)
 
-            elif data['type'] == 'get_friends':
-                friends = await db.get_friends(data['username'])
-                friends.append("AI Assistant")
+                elif data['type'] == 'message':
+        
+                    if data['to'] == "AI Assistant":
+                        await handle_message_to_ai(websocket, data)
+                    else:
+                        await db.save_message(data['from'], data['to'], data['content'])
+                        message_data = {
+                            'type': 'message',
+                            'from': data['from'],
+                            'to': data['to'],
+                            'content': data['content']
+                        }
+                        
+                        await broadcast_to_user(data['to'], message_data)
 
-                await websocket.send(json.dumps({
-                    'type': 'friends_list',
-                    'friends': friends
-                }))
-
-            elif data['type'] == 'message':
-                if data['to'] == "AI Assistant":
-                    ai_response = await ai_assistant.get_response(data['content'])
+                elif data['type'] == 'get_friends':
+                    friends = await db.get_friends(data['username'])
+                    friends.append("AI Assistant")
                     await websocket.send(json.dumps({
-                        'type': 'message',
-                        'from': "AI Assistant",
-                        'to': data['from'],
-                        'content': ai_response
+                        'type': 'friends_list',
+                        'friends': friends
                     }))
-                else:
-                    await db.save_message(data['from'], data['to'], data['content'])
 
-                    recipient_socket = connected_clients.get(data['to'])
-                    if recipient_socket:
-                        await recipient_socket.send(json.dumps(data))
+                elif data['type'] == 'get_friend_requests':
+                    requests = await db.get_friend_requests(data['username'])
+                    await websocket.send(json.dumps({
+                        'type': 'friend_requests',
+                        'requests': requests
+                    }))
 
-                    sender_socket = connected_clients.get(data['from'])
-                    if sender_socket:
-                        await sender_socket.send(json.dumps(data))
+                elif data['type'] == 'load_chat_history':
+                    messages = await db.get_messages(data['from'], data['to'])
+                    messages = convert_object_ids_and_datetimes_to_strings(messages)
+                    
+                    formatted_messages = [
+                        {
+                            'type': 'message',
+                            'from': msg['from'],
+                            'to': msg['to'],
+                            'content': msg['content']
+                        }
+                        for msg in messages
+                    ]
+                    
+                    await websocket.send(json.dumps({
+                        'type': 'chat_history',
+                        'chat': formatted_messages
+                    }))
 
-            elif data['type'] == 'get_friend_requests':
-                requests = await db.get_friend_requests(data['username'])
-                await websocket.send(json.dumps({
-                    'type': 'friend_requests',
-                    'requests': requests
-                }))
-            
-            elif data['type'] == 'load_chat_history':
-                # Fetch chat history from the database for the selected conversation
-                messages = await db.get_messages(data['from'], data['to'])
-                
-                # Convert any ObjectId or datetime fields
-                messages = convert_object_ids_and_datetimes_to_strings(messages)
-                
-                await websocket.send(json.dumps({
-                    'type': 'chat_history',
-                    'chat': messages,
-                }))
+            except json.JSONDecodeError:
+                logger.error("Invalid JSON received")
 
+    except websockets.exceptions.ConnectionClosed:
+        logger.info("Client connection closed")
     except Exception as e:
-        print(f"Error in handle_client: {e}")
+        logger.error(f"Error in handle_client: {e}")
     finally:
-        # Cleanup on disconnect
-        username = next((k for k, v in connected_clients.items() if v == websocket), None)
-        if username:
-            del connected_clients[username]
-            print(f"User {username} disconnected.")
-            await websocket.close()  # Ensure the connection is closed properly
-
-async def broadcast(message):
-    for client in connected_clients.values():
-        await client.send(json.dumps(message))
+        if client_username and client_username in connected_clients:
+            del connected_clients[client_username]
+            logger.info(f"User {client_username} disconnected")
 
 async def main():
+    try:
+        db.client.server_info()
+        logger.info("Successfully connected to MongoDB")
+    except Exception as e:
+        logger.error(f"Error connecting to MongoDB: {e}")
+        return
+
     server = await websockets.serve(handle_client, "localhost", 8765)
-    print("WebSocket server started on ws://localhost:8765")
+    logger.info("WebSocket server started on ws://localhost:8765")
     await server.wait_closed()
 
 if __name__ == "__main__":

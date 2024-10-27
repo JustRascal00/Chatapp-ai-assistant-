@@ -1,14 +1,27 @@
 from pymongo import MongoClient
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, uri):
+        if not uri:
+            raise ValueError("MongoDB URI cannot be empty")
+            
         self.client = MongoClient(uri)
         self.db = self.client['messenger_app']
         self.users = self.db['users']
         self.messages = self.db['messages']
         self.ai_messages = self.db['ai_messages']
 
+        # Create indexes
+        self.messages.create_index([("from", 1), ("to", 1)])
+        self.ai_messages.create_index([("from", 1), ("to", 1)])
+        self.users.create_index("username", unique=True)
+        
+        logger.info("Database initialized")
+        
     async def add_user(self, username):
         """
         Add a new user to the database if they don't already exist.
@@ -178,36 +191,55 @@ class Database:
         return True
 
     async def save_message(self, from_user, to_user, content):
-        if to_user == "AI Assistant" or from_user == "AI Assistant":
-            self.ai_messages.insert_one({
+        """
+        Save a message to the appropriate collection.
+        """
+        try:
+            message_doc = {
                 'from': from_user,
                 'to': to_user,
                 'content': content,
                 'timestamp': datetime.utcnow()
-            })
-        else:
-            self.messages.insert_one({
-                'from': from_user,
-                'to': to_user,
-                'content': content,
-                'timestamp': datetime.utcnow()
-            })
+            }
+            
+            if to_user == "AI Assistant" or from_user == "AI Assistant":
+                result = self.ai_messages.insert_one(message_doc)
+                logger.info(f"AI message saved with ID: {result.inserted_id}")
+            else:
+                result = self.messages.insert_one(message_doc)
+                logger.info(f"User message saved with ID: {result.inserted_id}")
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error saving message: {e}")
+            raise
     
     async def get_messages(self, user1, user2):
-        if user2 == "AI Assistant" or user1 == "AI Assistant":
-            return list(self.ai_messages.find({
+        """
+        Retrieve messages between two users.
+        """
+        try:
+            if user2 == "AI Assistant" or user1 == "AI Assistant":
+                messages = list(self.ai_messages.find({
+                    '$or': [
+                        {'from': user1, 'to': user2},
+                        {'from': user2, 'to': user1}
+                    ]
+                }).sort('timestamp'))
+                logger.info(f"Retrieved {len(messages)} AI messages")
+                return messages
+                
+            messages = list(self.messages.find({
                 '$or': [
                     {'from': user1, 'to': user2},
                     {'from': user2, 'to': user1}
                 ]
             }).sort('timestamp'))
-            
-        return list(self.messages.find({
-            '$or': [
-                {'from': user1, 'to': user2},
-                {'from': user2, 'to': user1}
-            ]
-        }).sort('timestamp'))
+            logger.info(f"Retrieved {len(messages)} user messages")
+            return messages
+        except Exception as e:
+            logger.error(f"Error retrieving messages: {e}")
+            raise
     
     async def get_user_profile(self, username):
         user = self.users.find_one({'username': username})
