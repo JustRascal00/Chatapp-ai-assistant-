@@ -16,7 +16,7 @@ import { ScrollArea } from "@/app/components/ui/scroll-area";
 export default function Chat({ socket, username, selectedFriend }) {
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState({});
-
+  const messageIds = useRef(new Set());
   const scrollAreaRef = useRef(null);
 
   useEffect(() => {
@@ -26,6 +26,7 @@ export default function Chat({ socket, username, selectedFriend }) {
         [selectedFriend]: prev[selectedFriend] || [],
       }));
 
+      // Request chat history for the selected friend
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(
           JSON.stringify({
@@ -34,57 +35,65 @@ export default function Chat({ socket, username, selectedFriend }) {
             to: selectedFriend,
           })
         );
-      } else if (socket) {
-        const handleOpen = () => {
-          socket.send(
-            JSON.stringify({
-              type: "load_chat_history",
-              from: username,
-              to: selectedFriend,
-            })
-          );
-        };
-
-        socket.addEventListener("open", handleOpen);
-
-        return () => {
-          socket.removeEventListener("open", handleOpen);
-        };
       }
     }
   }, [selectedFriend, socket, username]);
 
   useEffect(() => {
-    if (socket) {
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+    const handleIncomingMessage = (event) => {
+      const data = JSON.parse(event.data);
 
-        if (data.type === "message") {
-          const isRelevantMessage =
-            (data.from === selectedFriend && data.to === username) ||
-            (data.from === username && data.to === selectedFriend);
+      if (data.type === "message") {
+        const isRelevantMessage =
+          (data.from === selectedFriend && data.to === username) ||
+          (data.from === username && data.to === selectedFriend);
 
-          if (isRelevantMessage) {
+        if (isRelevantMessage) {
+          const messageId = `${data.from}-${data.to}-${data.content}`;
+
+          if (!messageIds.current.has(messageId)) {
+            messageIds.current.add(messageId);
             setChatHistory((prev) => ({
               ...prev,
               [selectedFriend]: [...(prev[selectedFriend] || []), data],
             }));
           }
-        } else if (data.type === "chat_history" && data.chat) {
-          setChatHistory((prev) => ({
-            ...prev,
-            [selectedFriend]: data.chat,
-          }));
         }
-      };
+      } else if (data.type === "chat_history" && data.chat) {
+        messageIds.current.clear();
+        const filteredMessages = data.chat.filter((msg) => {
+          const messageId = `${msg.from}-${msg.to}-${msg.content}`;
+          const isDuplicate = messageIds.current.has(messageId);
+          if (!isDuplicate) {
+            messageIds.current.add(messageId);
+            return true;
+          }
+          return false;
+        });
+
+        setChatHistory((prev) => ({
+          ...prev,
+          [selectedFriend]: filteredMessages,
+        }));
+      }
+    };
+
+    if (socket) {
+      socket.addEventListener("message", handleIncomingMessage);
     }
+
+    return () => {
+      if (socket) {
+        socket.removeEventListener("message", handleIncomingMessage);
+      }
+    };
   }, [socket, selectedFriend, username]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
-  }, [chatHistory]);
+  }, [chatHistory, selectedFriend]);
 
   const sendMessage = (e) => {
     e.preventDefault();
@@ -95,8 +104,20 @@ export default function Chat({ socket, username, selectedFriend }) {
         to: selectedFriend,
         content: inputMessage,
       };
-      socket.send(JSON.stringify(messageData));
-      setInputMessage("");
+
+      const messageId = `${username}-${selectedFriend}-${inputMessage}-${Date.now()}`;
+
+      if (!messageIds.current.has(messageId)) {
+        messageIds.current.add(messageId);
+
+        setChatHistory((prev) => ({
+          ...prev,
+          [selectedFriend]: [...(prev[selectedFriend] || []), messageData],
+        }));
+
+        socket.send(JSON.stringify(messageData));
+        setInputMessage("");
+      }
     }
   };
 
@@ -118,7 +139,7 @@ export default function Chat({ socket, username, selectedFriend }) {
         <div className="space-y-4">
           {chatHistory[selectedFriend]?.map((msg, index) => (
             <motion.div
-              key={index}
+              key={`${msg.from}-${msg.to}-${msg.content}-${index}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}
