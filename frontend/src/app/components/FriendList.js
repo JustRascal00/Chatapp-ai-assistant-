@@ -2,7 +2,12 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { User, Bot } from "lucide-react";
 
-export default function FriendList({ socket, username, onSelectFriend }) {
+export default function FriendList({
+  socket,
+  username,
+  onSelectFriend,
+  unreadMessages = {}, // Default to an empty object
+}) {
   const [friends, setFriends] = useState(["AI Assistant"]); // Initialize with "AI Assistant"
 
   useEffect(() => {
@@ -72,9 +77,9 @@ export default function FriendList({ socket, username, onSelectFriend }) {
             )}
             <span className="text-gray-200">{friend}</span>
           </div>
-          {friend === "AI Assistant" && (
-            <span className="text-xs bg-blue-500 text-white rounded-full px-2 py-1">
-              AI
+          {(unreadMessages[friend] || 0) > 0 && ( // Use default value of 0
+            <span className="text-xs bg-red-500 text-white rounded-full px-2 py-1">
+              {unreadMessages[friend]}
             </span>
           )}
         </motion.li>

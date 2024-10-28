@@ -18,16 +18,34 @@ export default function Component() {
   const [socket, setSocket] = useState(null);
   const [selectedFriend, setSelectedFriend] = useState("AI Assistant");
   const [isLoading, setIsLoading] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState({});
 
   useEffect(() => {
+    let ws;
     if (isLoggedIn) {
       setIsLoading(true);
-      const ws = new WebSocket("ws://localhost:8765");
+      ws = new WebSocket("ws://localhost:8765");
       setSocket(ws);
 
       ws.onopen = () => {
         ws.send(JSON.stringify({ type: "register", username }));
         setIsLoading(false);
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "message") {
+          handleMessageReceived(data.from);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log("WebSocket closed. Attempting to reconnect...");
+        // Implement reconnection logic if needed
+      };
+
+      ws.onerror = (error) => {
+        console.error("WebSocket error:", error);
       };
 
       return () => {
@@ -39,6 +57,21 @@ export default function Component() {
   const handleLogin = (e) => {
     e.preventDefault();
     setIsLoggedIn(true);
+  };
+
+  const handleMessageReceived = (from) => {
+    setUnreadMessages((prev) => ({
+      ...prev,
+      [from]: (prev[from] || 0) + 1,
+    }));
+  };
+
+  const handleSelectFriend = (friend) => {
+    setSelectedFriend(friend);
+    setUnreadMessages((prev) => ({
+      ...prev,
+      [friend]: 0,
+    }));
   };
 
   if (!isLoggedIn) {
@@ -94,7 +127,8 @@ export default function Component() {
             <FriendList
               socket={socket}
               username={username}
-              onSelectFriend={setSelectedFriend}
+              onSelectFriend={handleSelectFriend}
+              unreadMessages={unreadMessages}
             />
             <AddFriend socket={socket} username={username} />
             <FriendRequests socket={socket} username={username} />
@@ -109,6 +143,7 @@ export default function Component() {
               socket={socket}
               username={username}
               selectedFriend={selectedFriend}
+              onMessageReceived={handleMessageReceived}
             />
           </motion.div>
         </>

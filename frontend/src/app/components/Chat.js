@@ -5,7 +5,12 @@ import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 
-export default function Chat({ socket, username, selectedFriend }) {
+export default function Chat({
+  socket,
+  username,
+  selectedFriend,
+  onMessageReceived,
+}) {
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState({});
   const messageIds = useRef(new Set());
@@ -50,7 +55,7 @@ export default function Chat({ socket, username, selectedFriend }) {
           (data.from === username && data.to === selectedFriend);
 
         if (isRelevantMessage) {
-          const messageId = `${data.from}-${data.to}-${data.content}`;
+          const messageId = `${data.from}-${data.to}-${data.content}-${data.timestamp}`;
 
           if (!messageIds.current.has(messageId)) {
             messageIds.current.add(messageId);
@@ -67,6 +72,11 @@ export default function Chat({ socket, username, selectedFriend }) {
                 messageWithTimestamp,
               ],
             }));
+
+            // Notify parent component about the new message
+            if (data.from !== username) {
+              onMessageReceived(data.from);
+            }
 
             // If we receive a message and we're the recipient, mark it as read
             if (
@@ -96,7 +106,7 @@ export default function Chat({ socket, username, selectedFriend }) {
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
         const filteredMessages = data.chat.filter((msg) => {
-          const messageId = `${msg.from}-${msg.to}-${msg.content}`;
+          const messageId = `${msg.from}-${msg.to}-${msg.content}-${msg.timestamp}`;
           const isDuplicate = messageIds.current.has(messageId);
           if (!isDuplicate) {
             messageIds.current.add(messageId);
@@ -158,7 +168,7 @@ export default function Chat({ socket, username, selectedFriend }) {
         read: false,
       };
 
-      const messageId = `${username}-${selectedFriend}-${inputMessage}-${Date.now()}`;
+      const messageId = `${username}-${selectedFriend}-${inputMessage}-${messageData.timestamp}`;
 
       if (!messageIds.current.has(messageId)) {
         messageIds.current.add(messageId);
