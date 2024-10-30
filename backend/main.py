@@ -183,6 +183,16 @@ async def handle_client(websocket, path):
                     except Exception as e:
                         logger.error(f"Error handling mark_messages_read: {e}")
 
+                elif data['type'] == 'typing_status':
+                    # Broadcast typing status to the recipient
+                    typing_status = {
+                        'type': 'typing_status',
+                        'from': data['from'],
+                        'to': data['to'],
+                        'isTyping': data['isTyping']
+                    }
+                    await broadcast_to_user(data['to'], typing_status)
+
             except json.JSONDecodeError:
                 logger.error("Invalid JSON received") 
 

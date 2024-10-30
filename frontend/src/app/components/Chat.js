@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import { Send, Check, CheckCheck } from "lucide-react";
+import { Send, Check, CheckCheck, Loader2 } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
@@ -13,8 +13,11 @@ export default function Chat({
 }) {
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState({});
+  const [isTyping, setIsTyping] = useState(false);
+  const [friendIsTyping, setFriendIsTyping] = useState(false);
   const messageIds = useRef(new Set());
   const scrollAreaRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
   useEffect(() => {
     if (selectedFriend) {
@@ -55,30 +58,39 @@ export default function Chat({
           (data.from === username && data.to === selectedFriend);
 
         if (isRelevantMessage) {
-          const messageId = `${data.from}-${data.to}-${data.content}-${data.timestamp}`;
+          // Use a more unique message ID that includes the timestamp
+          const messageId = `${data.from}-${data.to}-${data.timestamp}`;
 
           if (!messageIds.current.has(messageId)) {
             messageIds.current.add(messageId);
-            // Ensure the message has a timestamp
             const messageWithTimestamp = {
               ...data,
               timestamp: data.timestamp || new Date().toISOString(),
             };
 
-            setChatHistory((prev) => ({
-              ...prev,
-              [selectedFriend]: [
-                ...(prev[selectedFriend] || []),
-                messageWithTimestamp,
-              ],
-            }));
+            setChatHistory((prev) => {
+              const existingMessages = prev[selectedFriend] || [];
+              // Check for duplicates based on content and timestamp proximity
+              const isDuplicate = existingMessages.some(
+                (msg) =>
+                  msg.content === data.content &&
+                  Math.abs(new Date(msg.timestamp) - new Date(data.timestamp)) <
+                    1000
+              );
 
-            // Notify parent component about the new message
+              if (!isDuplicate) {
+                return {
+                  ...prev,
+                  [selectedFriend]: [...existingMessages, messageWithTimestamp],
+                };
+              }
+              return prev;
+            });
+
             if (data.from !== username) {
               onMessageReceived(data.from);
             }
 
-            // If we receive a message and we're the recipient, mark it as read
             if (
               data.from === selectedFriend &&
               socket.readyState === WebSocket.OPEN
@@ -93,8 +105,11 @@ export default function Chat({
             }
           }
         }
+      } else if (data.type === "typing_status") {
+        if (data.from === selectedFriend) {
+          setFriendIsTyping(data.isTyping);
+        }
       } else if (data.type === "messages_read") {
-        // Update read status for messages
         setChatHistory((prev) => ({
           ...prev,
           [selectedFriend]: (prev[selectedFriend] || []).map((msg) => ({
@@ -105,23 +120,18 @@ export default function Chat({
         }));
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
-        const filteredMessages = data.chat.filter((msg) => {
-          const messageId = `${msg.from}-${msg.to}-${msg.content}-${msg.timestamp}`;
-          const isDuplicate = messageIds.current.has(messageId);
-          if (!isDuplicate) {
+        const processedMessages = data.chat.filter((msg) => {
+          const messageId = `${msg.from}-${msg.to}-${msg.timestamp}`;
+          if (!messageIds.current.has(messageId)) {
             messageIds.current.add(messageId);
-            // Ensure each message has a timestamp
-            return {
-              ...msg,
-              timestamp: msg.timestamp || new Date().toISOString(),
-            };
+            return true;
           }
           return false;
         });
 
         setChatHistory((prev) => ({
           ...prev,
-          [selectedFriend]: filteredMessages,
+          [selectedFriend]: processedMessages,
         }));
       }
     };
@@ -135,13 +145,46 @@ export default function Chat({
         socket.removeEventListener("message", handleIncomingMessage);
       }
     };
-  }, [socket, selectedFriend, username]);
+  }, [socket, selectedFriend, username, onMessageReceived]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
   }, [chatHistory, selectedFriend]);
+
+  // Handle typing status
+  const handleTyping = () => {
+    if (!isTyping) {
+      setIsTyping(true);
+      socket.send(
+        JSON.stringify({
+          type: "typing_status",
+          from: username,
+          to: selectedFriend,
+          isTyping: true,
+        })
+      );
+    }
+
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set new timeout
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      socket.send(
+        JSON.stringify({
+          type: "typing_status",
+          from: username,
+          to: selectedFriend,
+          isTyping: false,
+        })
+      );
+    }, 1000);
+  };
 
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return "";
@@ -159,20 +202,20 @@ export default function Chat({
   const sendMessage = (e) => {
     e.preventDefault();
     if (inputMessage.trim() && socket && socket.readyState === WebSocket.OPEN) {
+      const timestamp = new Date().toISOString();
       const messageData = {
         type: "message",
         from: username,
         to: selectedFriend,
         content: inputMessage,
-        timestamp: new Date().toISOString(),
+        timestamp,
         read: false,
       };
 
-      const messageId = `${username}-${selectedFriend}-${inputMessage}-${messageData.timestamp}`;
+      const messageId = `${username}-${selectedFriend}-${timestamp}`;
 
       if (!messageIds.current.has(messageId)) {
         messageIds.current.add(messageId);
-
         setChatHistory((prev) => ({
           ...prev,
           [selectedFriend]: [...(prev[selectedFriend] || []), messageData],
@@ -180,6 +223,20 @@ export default function Chat({
 
         socket.send(JSON.stringify(messageData));
         setInputMessage("");
+
+        // Clear typing status
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+        setIsTyping(false);
+        socket.send(
+          JSON.stringify({
+            type: "typing_status",
+            from: username,
+            to: selectedFriend,
+            isTyping: false,
+          })
+        );
       }
     }
   };
@@ -201,9 +258,17 @@ export default function Chat({
   return (
     <div className="flex flex-col h-full bg-zinc-900 rounded-lg shadow-lg">
       <div className="p-4 bg-zinc-800 rounded-t-lg flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-100">
-          Chat with {selectedFriend}
-        </h2>
+        <div className="flex items-center space-x-2">
+          <h2 className="text-xl font-bold text-gray-100">
+            Chat with {selectedFriend}
+          </h2>
+          {friendIsTyping && (
+            <div className="flex items-center space-x-2 text-gray-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">typing...</span>
+            </div>
+          )}
+        </div>
         <div className="flex items-center space-x-2">
           <span className="text-sm text-gray-400">Logged in as:</span>
           <span className="text-sm font-semibold text-gray-100">
@@ -216,7 +281,7 @@ export default function Chat({
         <div className="space-y-4">
           {chatHistory[selectedFriend]?.map((msg, index) => (
             <motion.div
-              key={`${msg.from}-${msg.to}-${msg.content}-${index}`}
+              key={`${msg.from}-${msg.to}-${msg.timestamp}-${index}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}
@@ -244,7 +309,10 @@ export default function Chat({
           <Input
             type="text"
             value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
+            onChange={(e) => {
+              setInputMessage(e.target.value);
+              handleTyping();
+            }}
             className="flex-1 bg-zinc-700 text-gray-100 placeholder-gray-400"
             placeholder="Type a message..."
           />
