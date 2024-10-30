@@ -27,7 +27,6 @@ export default function Chat({
       }));
 
       if (socket && socket.readyState === WebSocket.OPEN) {
-        // Mark all unread messages as read when opening chat
         socket.send(
           JSON.stringify({
             type: "mark_messages_read",
@@ -36,7 +35,6 @@ export default function Chat({
           })
         );
 
-        // Request chat history
         socket.send(
           JSON.stringify({
             type: "load_chat_history",
@@ -57,52 +55,39 @@ export default function Chat({
           (data.from === selectedFriend && data.to === username) ||
           (data.from === username && data.to === selectedFriend);
 
-        if (isRelevantMessage) {
-          // Use a more unique message ID that includes the timestamp
-          const messageId = `${data.from}-${data.to}-${data.timestamp}`;
+        // Check if the message ID already exists
+        if (isRelevantMessage && !messageIds.current.has(data.id)) {
+          // Add the message ID to the set to track it as processed
+          messageIds.current.add(data.id);
 
-          if (!messageIds.current.has(messageId)) {
-            messageIds.current.add(messageId);
-            const messageWithTimestamp = {
-              ...data,
-              timestamp: data.timestamp || new Date().toISOString(),
+          const messageWithTimestamp = {
+            ...data,
+            timestamp: data.timestamp || new Date().toISOString(),
+          };
+
+          setChatHistory((prev) => {
+            const existingMessages = prev[selectedFriend] || [];
+            return {
+              ...prev,
+              [selectedFriend]: [...existingMessages, messageWithTimestamp],
             };
+          });
 
-            setChatHistory((prev) => {
-              const existingMessages = prev[selectedFriend] || [];
-              // Check for duplicates based on content and timestamp proximity
-              const isDuplicate = existingMessages.some(
-                (msg) =>
-                  msg.content === data.content &&
-                  Math.abs(new Date(msg.timestamp) - new Date(data.timestamp)) <
-                    1000
-              );
+          if (data.from !== username) {
+            onMessageReceived(data.from);
+          }
 
-              if (!isDuplicate) {
-                return {
-                  ...prev,
-                  [selectedFriend]: [...existingMessages, messageWithTimestamp],
-                };
-              }
-              return prev;
-            });
-
-            if (data.from !== username) {
-              onMessageReceived(data.from);
-            }
-
-            if (
-              data.from === selectedFriend &&
-              socket.readyState === WebSocket.OPEN
-            ) {
-              socket.send(
-                JSON.stringify({
-                  type: "mark_messages_read",
-                  reader: username,
-                  sender: selectedFriend,
-                })
-              );
-            }
+          if (
+            data.from === selectedFriend &&
+            socket.readyState === WebSocket.OPEN
+          ) {
+            socket.send(
+              JSON.stringify({
+                type: "mark_messages_read",
+                reader: username,
+                sender: selectedFriend,
+              })
+            );
           }
         }
       } else if (data.type === "typing_status") {
@@ -120,18 +105,9 @@ export default function Chat({
         }));
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
-        const processedMessages = data.chat.filter((msg) => {
-          const messageId = `${msg.from}-${msg.to}-${msg.timestamp}`;
-          if (!messageIds.current.has(messageId)) {
-            messageIds.current.add(messageId);
-            return true;
-          }
-          return false;
-        });
-
         setChatHistory((prev) => ({
           ...prev,
-          [selectedFriend]: processedMessages,
+          [selectedFriend]: data.chat,
         }));
       }
     };
@@ -212,32 +188,27 @@ export default function Chat({
         read: false,
       };
 
-      const messageId = `${username}-${selectedFriend}-${timestamp}`;
+      setChatHistory((prev) => ({
+        ...prev,
+        [selectedFriend]: [...(prev[selectedFriend] || []), messageData],
+      }));
 
-      if (!messageIds.current.has(messageId)) {
-        messageIds.current.add(messageId);
-        setChatHistory((prev) => ({
-          ...prev,
-          [selectedFriend]: [...(prev[selectedFriend] || []), messageData],
-        }));
+      socket.send(JSON.stringify(messageData));
+      setInputMessage("");
 
-        socket.send(JSON.stringify(messageData));
-        setInputMessage("");
-
-        // Clear typing status
-        if (typingTimeoutRef.current) {
-          clearTimeout(typingTimeoutRef.current);
-        }
-        setIsTyping(false);
-        socket.send(
-          JSON.stringify({
-            type: "typing_status",
-            from: username,
-            to: selectedFriend,
-            isTyping: false,
-          })
-        );
+      // Clear typing status
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
       }
+      setIsTyping(false);
+      socket.send(
+        JSON.stringify({
+          type: "typing_status",
+          from: username,
+          to: selectedFriend,
+          isTyping: false,
+        })
+      );
     }
   };
 
