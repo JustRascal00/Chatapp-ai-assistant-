@@ -4,6 +4,7 @@ import { Send, Check, CheckCheck, Loader2 } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
+import MessageReactions from "./MessageReactions";
 
 export default function Chat({
   socket,
@@ -49,6 +50,17 @@ export default function Chat({
   useEffect(() => {
     const handleIncomingMessage = (event) => {
       const data = JSON.parse(event.data);
+
+      if (data.type === "reaction_update") {
+        setChatHistory((prev) => ({
+          ...prev,
+          [selectedFriend]: (prev[selectedFriend] || []).map((msg) =>
+            msg._id === data.messageId
+              ? { ...msg, reactions: data.reactions }
+              : msg
+          ),
+        }));
+      }
 
       if (data.type === "message") {
         const isRelevantMessage =
@@ -269,7 +281,15 @@ export default function Chat({
                 </span>
               </div>
               <p className="break-words">{msg.content}</p>
-              {getReadStatus(msg)}
+              <div className="mt-2 flex items-center justify-between">
+                {getReadStatus(msg)}
+                <MessageReactions
+                  message={msg}
+                  socket={socket}
+                  username={username}
+                  selectedFriend={selectedFriend}
+                />
+              </div>
             </motion.div>
           ))}
         </div>

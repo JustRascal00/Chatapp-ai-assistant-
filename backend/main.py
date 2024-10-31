@@ -51,12 +51,13 @@ async def handle_message_to_ai(websocket, user_message_data):
         ai_response = await ai_assistant.get_response(user_message_data['content'])
 
         # Save user's message to database
-        await db.save_message(user_message_data['from'], "AI Assistant", user_message_data['content'])
-        await db.save_message("AI Assistant", user_message_data['from'], ai_response)
+        user_msg_id = await db.save_message(user_message_data['from'], "AI Assistant", user_message_data['content'])
+        ai_msg_id = await db.save_message("AI Assistant", user_message_data['from'], ai_response)
 
-        # Send AI response
+        # Send AI response with message ID
         ai_message = {
             'type': 'message',
+            '_id': str(ai_msg_id),
             'from': "AI Assistant",
             'to': user_message_data['from'],
             'content': ai_response
@@ -65,7 +66,6 @@ async def handle_message_to_ai(websocket, user_message_data):
 
     except Exception as e:
         logger.error(f"Error in AI message handling: {e}")
-        # Send error message back to user
         await websocket.send(json.dumps({
             'type': 'error',
             'message': 'Failed to get AI response. Please try again.'
@@ -138,7 +138,44 @@ async def handle_client(websocket, path):
                         'type': 'friends_list',
                         'friends': friends
                     }))
-
+                elif data['type'] == 'message_reaction':
+                    try:
+                        if not all(key in data for key in ['messageId', 'from', 'emoji']):
+                            raise ValueError("Missing required fields for reaction")
+                            
+                        result = await db.add_reaction(
+                            data['messageId'],
+                            data['from'],
+                            data['emoji']
+                        )
+                        
+                        # Create reaction update message
+                        reaction_update = {
+                            'type': 'reaction_update',
+                            'messageId': str(result['message_id']),
+                            'reactions': result['reactions']
+                        }
+                        
+                        # Get the message details to find participants
+                        message = await db.get_message_by_id(data['messageId'])
+                        if message:
+                            # Send update to both the message sender and receiver
+                            for participant in [message['from'], message['to']]:
+                                if participant in connected_clients:
+                                    try:
+                                        await connected_clients[participant].send(
+                                            json.dumps(reaction_update)
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Error sending reaction to {participant}: {e}")
+                                        
+                    except Exception as e:
+                        logger.error(f"Error handling reaction: {str(e)}")
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': 'Failed to add reaction'
+                        }))
+                        
                 elif data['type'] == 'get_friend_requests':
                     requests = await db.get_friend_requests(data['username'])
                     await websocket.send(json.dumps({
@@ -153,6 +190,7 @@ async def handle_client(websocket, path):
                     formatted_messages = [
                         {
                             'type': 'message',
+                            '_id': str(msg['_id']),  
                             'from': msg['from'],
                             'to': msg['to'],
                             'content': msg['content'],

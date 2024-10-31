@@ -1,3 +1,4 @@
+from bson import ObjectId
 from pymongo import MongoClient
 from datetime import datetime
 import logging
@@ -125,7 +126,76 @@ class Database:
             'from': from_user,
             'to': to_user
         }
+    async def add_reaction(self, message_id, from_user, emoji):
+        """
+        Add or update a reaction to a message.
+        """
+        try:
+            # Convert string message_id to ObjectId
+            message_id = ObjectId(message_id)
+            
+            # Find the message in both regular and AI messages collections
+            message = self.messages.find_one({'_id': message_id})
+            collection = self.messages if message else self.ai_messages
+            
+            if not message:
+                message = self.ai_messages.find_one({'_id': message_id})
+                if not message:
+                    raise ValueError(f"Message with id {message_id} not found")
 
+            # Initialize reactions array if it doesn't exist and add/update reaction
+            result = collection.update_one(
+                {'_id': message_id},
+                {
+                    '$pull': {
+                        'reactions': {
+                            'user': from_user
+                        }
+                    }
+                }
+            )
+
+            result = collection.update_one(
+                {'_id': message_id},
+                {
+                    '$push': {
+                        'reactions': {
+                            'user': from_user,
+                            'emoji': emoji,
+                            'timestamp': datetime.utcnow().isoformat()
+                        }
+                    }
+                }
+            )
+
+            # Get updated message with reactions
+            updated_message = collection.find_one({'_id': message_id})
+            if not updated_message:
+                raise ValueError(f"Failed to retrieve updated message {message_id}")
+                
+            # Group reactions by emoji for the response
+            reaction_counts = {}
+            for reaction in updated_message.get('reactions', []):
+                emoji = reaction['emoji']
+                if emoji in reaction_counts:
+                    reaction_counts[emoji]['count'] += 1
+                    reaction_counts[emoji]['users'].append(reaction['user'])
+                else:
+                    reaction_counts[emoji] = {
+                        'emoji': emoji,
+                        'count': 1,
+                        'users': [reaction['user']]
+                    }
+
+            return {
+                'message_id': str(message_id),
+                'reactions': list(reaction_counts.values())
+            }
+
+        except Exception as e:
+            logger.error(f"Error adding reaction: {str(e)}")
+            raise
+        
     async def accept_friend_request(self, user, friend):
         """
         Accept a friend request. Adds each user to the other's friends list
@@ -193,13 +263,14 @@ class Database:
     async def save_message(self, from_user, to_user, content):
         """
         Save a message to the appropriate collection with read receipt status.
+        Returns the inserted message ID.
         """
         try:
             message_doc = {
                 'from': from_user,
                 'to': to_user,
                 'content': content,
-                'timestamp': datetime.utcnow().isoformat(),  # Store as ISO string
+                'timestamp': datetime.utcnow().isoformat(),
                 'read': False,
                 'readAt': None
             }
@@ -211,10 +282,32 @@ class Database:
                 result = self.messages.insert_one(message_doc)
                 logger.info(f"User message saved with ID: {result.inserted_id}")
                 
-            return True
+            return str(result.inserted_id)
         except Exception as e:
             logger.error(f"Error saving message: {e}")
             raise
+    async def get_message_by_id(self, message_id):
+        """
+        Retrieve a message by its ID from either messages or ai_messages collection.
+        """
+        try:
+            message_id = ObjectId(message_id)
+            
+            # Check regular messages first
+            message = self.messages.find_one({'_id': message_id})
+            if message:
+                return message
+                
+            # Check AI messages if not found in regular messages
+            message = self.ai_messages.find_one({'_id': message_id})
+            if message:
+                return message
+                
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving message by ID: {e}")
+            raise
+           
 
     async def mark_messages_read(self, reader, sender):
         """
