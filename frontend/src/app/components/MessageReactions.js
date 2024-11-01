@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { SmilePlus } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import {
@@ -11,103 +11,174 @@ const commonEmojis = ["👍", "❤️", "😊", "😂", "🎉", "👏", "🙌", 
 
 const MessageReactions = ({ message, socket, username, selectedFriend }) => {
   const [isOpen, setIsOpen] = useState(false);
-
-  // Helper function to safely get message ID
-  const getMessageId = (message) => {
-    if (!message) return null;
-    // Handle both _id and id properties
-    return message._id || message.id || null;
-  };
-
-  const handleReaction = (emoji) => {
-    // Get message ID safely
-    const messageId = getMessageId(message);
-
-    // Debug log to see all values
-    console.log("Reaction attempt with values:", {
-      messageObject: message,
-      messageId,
-      username,
-      emoji,
-      socketState: socket?.readyState,
-    });
-
-    // Validate socket first
-    if (!socket) {
-      console.error("Socket is not initialized");
-      return;
-    }
-
-    if (socket.readyState !== WebSocket.OPEN) {
-      console.error("Socket is not open. Current state:", socket.readyState);
-      return;
-    }
-
-    // Validate message object
-    if (!message) {
-      console.error("Message object is undefined");
-      return;
-    }
-
-    // Validate message ID
-    if (!messageId) {
-      console.error(
-        "Message ID could not be determined from message object:",
-        message
-      );
-      return;
-    }
-
-    // Validate username
-    if (!username) {
-      console.error("Username is missing");
-      return;
-    }
-
-    // Validate emoji
-    if (!emoji) {
-      console.error("Emoji is missing");
-      return;
-    }
-
-    // If we get here, all validations passed
-    const reactionData = {
-      type: "message_reaction",
-      messageId: messageId,
-      from: username,
-      emoji: emoji,
-    };
-
-    console.log("Sending reaction data:", reactionData);
-
-    try {
-      socket.send(JSON.stringify(reactionData));
-      setIsOpen(false);
-    } catch (error) {
-      console.error("Error sending reaction:", error);
-    }
-  };
+  const [localReactions, setLocalReactions] = useState([]);
+  const pendingReactionsRef = useRef(new Set());
+  const messageIdRef = useRef(null);
 
   // Helper function to safely get reactions
-  const getReactions = (message) => {
-    if (!message) return [];
-    return Array.isArray(message.reactions) ? message.reactions : [];
-  };
+  const getReactions = useCallback((msg) => {
+    if (!msg) return [];
+    return Array.isArray(msg.reactions) ? msg.reactions : [];
+  }, []);
 
-  // Debug render to see what props we're getting
-  console.log("MessageReactions render with props:", {
-    messageId: getMessageId(message),
-    hasReactions: Boolean(message?.reactions),
-    reactionsCount: getReactions(message).length,
-    username,
-  });
+  // Helper function to safely get message ID
+  const getMessageId = useCallback((msg) => {
+    if (!msg || !msg._id) return null;
+    return typeof msg._id === "string" ? msg._id : String(msg._id);
+  }, []);
+
+  // Initialize local reactions and messageId whenever message changes
+  useEffect(() => {
+    const initialReactions = getReactions(message);
+    setLocalReactions(initialReactions);
+    messageIdRef.current = getMessageId(message);
+  }, [message, getReactions, getMessageId]);
+
+  // Process reaction updates from WebSocket
+  const handleWebSocketMessage = useCallback((event) => {
+    try {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "reaction_update" && data.messageId && data.reactions) {
+        // Compare with stored messageId instead of getting it from message prop
+        if (data.messageId === messageIdRef.current) {
+          console.log("Processing reaction update:", {
+            messageId: data.messageId,
+            reactions: data.reactions,
+          });
+
+          // Clear any pending reactions for this update
+          pendingReactionsRef.current.clear();
+
+          // Update with server-provided reactions
+          setLocalReactions(data.reactions);
+          console.log("Updated local reactions:", data.reactions);
+        }
+      }
+    } catch (error) {
+      console.error("Error processing reaction update:", error);
+    }
+  }, []); // Ensure dependencies are correct
+
+  // WebSocket event listener setup
+  useEffect(() => {
+    if (!socket) return;
+
+    // Add event listener
+    socket.addEventListener("message", handleWebSocketMessage);
+
+    // Cleanup
+    return () => {
+      socket.removeEventListener("message", handleWebSocketMessage);
+    };
+  }, [socket, handleWebSocketMessage]);
+
+  // Permission check for reactions
+  const canUserReact = useCallback(() => {
+    if (!message) return false;
+    if (message.from === "AI Assistant" || message.to === "AI Assistant")
+      return true;
+    return message.from !== username;
+  }, [message, username]);
+
+  // Handle reaction click with optimistic updates
+  const handleReaction = useCallback(
+    (emoji) => {
+      if (!message || !canUserReact()) {
+        console.warn("Cannot react to this message");
+        return;
+      }
+
+      const messageId = getMessageId(message);
+      if (!messageId || !socket || socket.readyState !== WebSocket.OPEN) {
+        console.error("Cannot send reaction: invalid state");
+        return;
+      }
+
+      try {
+        // Create unique key for this reaction
+        const reactionKey = `${messageId}-${emoji}-${username}-${Date.now()}`;
+        pendingReactionsRef.current.add(reactionKey);
+
+        // Prepare reaction data
+        const reactionData = {
+          type: "message_reaction",
+          messageId,
+          from: username,
+          emoji,
+        };
+
+        // Send to server first
+        console.log("Sending reaction:", reactionData);
+        socket.send(JSON.stringify(reactionData));
+
+        // Optimistically update local state
+        setLocalReactions((prevReactions) => {
+          // Check if user already reacted with this emoji
+          const existingReaction = prevReactions.find(
+            (r) => r.emoji === emoji && r.users?.includes(username)
+          );
+
+          if (existingReaction) {
+            return prevReactions;
+          }
+
+          // Find if emoji already exists but user hasn't reacted
+          const existingEmojiReaction = prevReactions.find(
+            (r) => r.emoji === emoji
+          );
+
+          if (existingEmojiReaction) {
+            return prevReactions.map((r) => {
+              if (r.emoji === emoji) {
+                return {
+                  ...r,
+                  count: (r.count || 1) + 1,
+                  users: [...(r.users || []), username],
+                };
+              }
+              return r;
+            });
+          }
+
+          // Add new reaction
+          return [
+            ...prevReactions,
+            {
+              emoji,
+              count: 1,
+              users: [username],
+            },
+          ];
+        });
+
+        // Set timeout to revert if no server response
+        setTimeout(() => {
+          if (pendingReactionsRef.current.has(reactionKey)) {
+            pendingReactionsRef.current.delete(reactionKey);
+            console.log("Reaction timeout - no server response");
+            // Could add logic here to revert the optimistic update
+          }
+        }, 5000);
+
+        setIsOpen(false);
+      } catch (error) {
+        console.error("Error handling reaction:", error);
+      }
+    },
+    [message, getMessageId, canUserReact, socket, username]
+  );
+
+  // Render nothing if message is invalid
+  if (!message || !getMessageId(message)) return null;
 
   return (
     <div className="flex items-center space-x-1">
-      {getReactions(message).map((reaction, index) => (
+      {localReactions.map((reaction, index) => (
         <div
           key={`${reaction.emoji}-${index}`}
-          className="inline-flex items-center bg-zinc-700/50 rounded px-1.5 py-0.5 text-xs"
+          className="inline-flex items-center bg-zinc-700/50 rounded px-1.5 py-0.5 text-xs hover:bg-zinc-700/70 transition-colors cursor-default"
+          title={reaction.users?.join(", ") || "Loading..."}
         >
           <span>{reaction.emoji}</span>
           <span className="ml-1 text-zinc-400">
@@ -116,30 +187,34 @@ const MessageReactions = ({ message, socket, username, selectedFriend }) => {
         </div>
       ))}
 
-      <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0 hover:bg-zinc-700/50"
-          >
-            <SmilePlus className="h-4 w-4 text-zinc-400" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-auto p-2">
-          <div className="flex gap-1">
-            {commonEmojis.map((emoji) => (
-              <button
-                key={emoji}
-                onClick={() => handleReaction(emoji)}
-                className="hover:bg-zinc-700/50 p-1.5 rounded transition-colors"
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-        </PopoverContent>
-      </Popover>
+      {canUserReact() && (
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 hover:bg-zinc-700/50 transition-colors"
+              aria-label="Add reaction"
+            >
+              <SmilePlus className="h-4 w-4 text-zinc-400" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-2">
+            <div className="flex gap-1">
+              {commonEmojis.map((emoji) => (
+                <button
+                  key={emoji}
+                  onClick={() => handleReaction(emoji)}
+                  className="hover:bg-zinc-700/50 p-1.5 rounded transition-colors"
+                  aria-label={`React with ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      )}
     </div>
   );
 };

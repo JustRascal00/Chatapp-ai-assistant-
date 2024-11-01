@@ -38,10 +38,13 @@ async def broadcast_to_user(username, message):
     if username in connected_clients:
         try:
             await connected_clients[username].send(json.dumps(message))
+            logger.info(f"Successfully sent message to {username}")
             return True
         except Exception as e:
             logger.error(f"Error broadcasting to user {username}: {e}")
             return False
+    else:
+        logger.warning(f"User {username} not found in connected clients")
     return False
 
 async def handle_message_to_ai(websocket, user_message_data):
@@ -70,6 +73,75 @@ async def handle_message_to_ai(websocket, user_message_data):
             'type': 'error',
             'message': 'Failed to get AI response. Please try again.'
         }))
+
+async def handle_reaction(websocket, data):
+    max_retries = 3
+    retry_delay = 1  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            if not all(key in data for key in ['messageId', 'from', 'emoji']):
+                raise ValueError("Missing required fields for reaction")
+            
+            if not db.is_valid_object_id(data['messageId']):
+                logger.error(f"Invalid message ID format: {data['messageId']}")
+                await websocket.send(json.dumps({
+                    'type': 'error',
+                    'message': 'Invalid message ID format'
+                }))
+                return
+
+            # Check if the message exists before adding the reaction
+            message = await db.get_message_by_id(data['messageId'])
+            if not message:
+                raise ValueError(f"Message {data['messageId']} not found")
+            
+            result = await db.add_reaction(
+                data['messageId'],
+                data['from'],
+                data['emoji']
+            )
+            
+            if result is None:
+                raise ValueError(f"Failed to add reaction. Message {data['messageId']} not found.")
+            
+            # Create the reaction update message
+            reaction_update = {
+                'type': 'reaction_update',
+                'messageId': str(data['messageId']),  # Ensure messageId is a string
+                'reactions': result['reactions']
+            }
+            
+            # Get both participants
+            participants = set([message['from'], message['to']])  # Use set to avoid duplicates
+            
+            # Broadcast to all relevant participants
+            broadcast_tasks = []
+            logger.info(f"Broadcasting reaction update to participants: {participants}")
+            for participant in participants:
+                if participant in connected_clients:
+                    try:
+                        # Create broadcast task
+                        task = broadcast_to_user(participant, reaction_update)
+                        broadcast_tasks.append(task)
+                    except Exception as e:
+                        logger.error(f"Error preparing broadcast to {participant}: {e}")
+            
+            # Wait for all broadcasts to complete
+            if broadcast_tasks:
+                await asyncio.gather(*broadcast_tasks)
+                
+            return  # Success, exit the function
+            
+        except Exception as e:
+            logger.error(f"Error handling reaction (attempt {attempt + 1}): {str(e)}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+            else:
+                await websocket.send(json.dumps({
+                    'type': 'error',
+                    'message': 'Failed to add reaction after multiple attempts'
+                }))
 
 async def handle_client(websocket, path):
     client_username = None
@@ -121,9 +193,10 @@ async def handle_client(websocket, path):
                     if data['to'] == "AI Assistant":
                         await handle_message_to_ai(websocket, data)
                     else:
-                        await db.save_message(data['from'], data['to'], data['content'])
+                        message_id = await db.save_message(data['from'], data['to'], data['content'])
                         message_data = {
                             'type': 'message',
+                            '_id': message_id,
                             'from': data['from'],
                             'to': data['to'],
                             'content': data['content']
@@ -138,44 +211,10 @@ async def handle_client(websocket, path):
                         'type': 'friends_list',
                         'friends': friends
                     }))
+
                 elif data['type'] == 'message_reaction':
-                    try:
-                        if not all(key in data for key in ['messageId', 'from', 'emoji']):
-                            raise ValueError("Missing required fields for reaction")
-                            
-                        result = await db.add_reaction(
-                            data['messageId'],
-                            data['from'],
-                            data['emoji']
-                        )
-                        
-                        # Create reaction update message
-                        reaction_update = {
-                            'type': 'reaction_update',
-                            'messageId': str(result['message_id']),
-                            'reactions': result['reactions']
-                        }
-                        
-                        # Get the message details to find participants
-                        message = await db.get_message_by_id(data['messageId'])
-                        if message:
-                            # Send update to both the message sender and receiver
-                            for participant in [message['from'], message['to']]:
-                                if participant in connected_clients:
-                                    try:
-                                        await connected_clients[participant].send(
-                                            json.dumps(reaction_update)
-                                        )
-                                    except Exception as e:
-                                        logger.error(f"Error sending reaction to {participant}: {e}")
-                                        
-                    except Exception as e:
-                        logger.error(f"Error handling reaction: {str(e)}")
-                        await websocket.send(json.dumps({
-                            'type': 'error',
-                            'message': 'Failed to add reaction'
-                        }))
-                        
+                    await handle_reaction(websocket, data)
+
                 elif data['type'] == 'get_friend_requests':
                     requests = await db.get_friend_requests(data['username'])
                     await websocket.send(json.dumps({
@@ -195,8 +234,9 @@ async def handle_client(websocket, path):
                             'to': msg['to'],
                             'content': msg['content'],
                             'timestamp': msg.get('timestamp'),
-                            'read': msg.get('read', False),
-                            'readAt': msg.get('readAt')
+                            'read':   msg.get('read', False),
+                            'readAt': msg.get('readAt'),
+                            'reactions': msg.get('reactions', [])  # Include reactions if available
                         }
                         for msg in messages
                     ]

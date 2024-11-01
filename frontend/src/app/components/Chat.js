@@ -52,14 +52,19 @@ export default function Chat({
       const data = JSON.parse(event.data);
 
       if (data.type === "reaction_update") {
-        setChatHistory((prev) => ({
-          ...prev,
-          [selectedFriend]: (prev[selectedFriend] || []).map((msg) =>
+        console.log("Received reaction update:", data);
+        setChatHistory((prev) => {
+          const updatedMessages = (prev[selectedFriend] || []).map((msg) =>
             msg._id === data.messageId
               ? { ...msg, reactions: data.reactions }
               : msg
-          ),
-        }));
+          );
+          console.log("Updated messages:", updatedMessages);
+          return {
+            ...prev,
+            [selectedFriend]: updatedMessages,
+          };
+        });
       }
 
       if (data.type === "message") {

@@ -2,6 +2,8 @@ from bson import ObjectId
 from pymongo import MongoClient
 from datetime import datetime
 import logging
+from cachetools import TTLCache
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,9 @@ class Database:
         self.messages.create_index([("from", 1), ("to", 1)])
         self.ai_messages.create_index([("from", 1), ("to", 1)])
         self.users.create_index("username", unique=True)
+        
+        # Initialize message cache
+        self.message_cache = TTLCache(maxsize=1000, ttl=300)  # Cache up to 1000 messages for 5 minutes
         
         logger.info("Database initialized")
         
@@ -126,6 +131,7 @@ class Database:
             'from': from_user,
             'to': to_user
         }
+
     async def add_reaction(self, message_id, from_user, emoji):
         """
         Add or update a reaction to a message.
@@ -135,13 +141,12 @@ class Database:
             message_id = ObjectId(message_id)
             
             # Find the message in both regular and AI messages collections
-            message = self.messages.find_one({'_id': message_id})
-            collection = self.messages if message else self.ai_messages
-            
+            message = await self.get_message_by_id(message_id)
             if not message:
-                message = self.ai_messages.find_one({'_id': message_id})
-                if not message:
-                    raise ValueError(f"Message with id {message_id} not found")
+                logger.error(f"Message with id {message_id} not found in either messages or ai_messages collection")
+                return None
+
+            collection = self.messages if message['to'] != "AI Assistant" and message['from'] != "AI Assistant" else self.ai_messages
 
             # Initialize reactions array if it doesn't exist and add/update reaction
             result = collection.update_one(
@@ -172,6 +177,9 @@ class Database:
             updated_message = collection.find_one({'_id': message_id})
             if not updated_message:
                 raise ValueError(f"Failed to retrieve updated message {message_id}")
+            
+            # Update cache
+            self.message_cache[str(message_id)] = updated_message
                 
             # Group reactions by emoji for the response
             reaction_counts = {}
@@ -194,6 +202,7 @@ class Database:
 
         except Exception as e:
             logger.error(f"Error adding reaction: {str(e)}")
+            logger.error(f"Message ID: {message_id}, From User: {from_user}, Emoji: {emoji}")
             raise
         
     async def accept_friend_request(self, user, friend):
@@ -278,37 +287,60 @@ class Database:
             if to_user == "AI Assistant" or from_user == "AI Assistant":
                 result = self.ai_messages.insert_one(message_doc)
                 logger.info(f"AI message saved with ID: {result.inserted_id}")
+                collection = self.ai_messages
             else:
                 result = self.messages.insert_one(message_doc)
                 logger.info(f"User message saved with ID: {result.inserted_id}")
-                
+                collection = self.messages
+            
+            # Add the message to the cache
+            self.message_cache[str(result.inserted_id)] = message_doc
+            
+            # Simulate a delay to ensure the message is saved before reactions are added
+            await asyncio.sleep(0.5)
+            
             return str(result.inserted_id)
         except Exception as e:
             logger.error(f"Error saving message: {e}")
             raise
+
     async def get_message_by_id(self, message_id):
         """
         Retrieve a message by its ID from either messages or ai_messages collection.
         """
         try:
+            # Check cache first
+            cached_message = self.message_cache.get(str(message_id))
+            if cached_message:
+                return cached_message
+
             message_id = ObjectId(message_id)
             
             # Check regular messages first
             message = self.messages.find_one({'_id': message_id})
             if message:
+                self.message_cache[str(message_id)] = message
                 return message
                 
             # Check AI messages if not found in regular messages
             message = self.ai_messages.find_one({'_id': message_id})
             if message:
+                self.message_cache[str(message_id)] = message
                 return message
                 
+            logger.error(f"Message with id {message_id} not found in either messages or ai_messages collection")
             return None
         except Exception as e:
             logger.error(f"Error retrieving message by ID: {e}")
             raise
-           
 
+    def is_valid_object_id(self, id_string):
+        try:
+            ObjectId(id_string)
+            return True
+        except:
+            return False
+           
     async def mark_messages_read(self, reader, sender):
         """
         Mark all messages from sender to reader as read.
@@ -390,3 +422,20 @@ class Database:
                 'joined_date': user.get('joined_date', datetime.utcnow())
             }
         return None
+
+    def is_valid_object_id(self, id_string):
+        try:
+            ObjectId(id_string)
+            return True
+        except:
+            return False
+
+    async def check_message_consistency(self):
+        all_messages = list(self.messages.find({})) + list(self.ai_messages.find({}))
+        message_ids = set(str(msg['_id']) for msg in all_messages)
+        
+        for msg in all_messages:
+            if 'reactions' in msg:
+                for reaction in msg['reactions']:
+                    if 'messageId' in reaction and str(reaction['messageId']) not in message_ids:
+                        logger.error(f"Inconsistency found: Reaction refers to non-existent message {reaction['messageId']}")
