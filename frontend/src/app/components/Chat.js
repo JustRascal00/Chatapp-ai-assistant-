@@ -20,6 +20,8 @@ export default function Chat({
   const scrollAreaRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
+  const messageUpdateTimeRef = useRef({});
+
   useEffect(() => {
     if (selectedFriend) {
       setChatHistory((prev) => ({
@@ -48,22 +50,78 @@ export default function Chat({
   }, [selectedFriend, socket, username]);
 
   useEffect(() => {
+    if (selectedFriend) {
+      setChatHistory((prev) => ({
+        ...prev,
+        [selectedFriend]: prev[selectedFriend] || [],
+      }));
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "mark_messages_read",
+            reader: username,
+            sender: selectedFriend,
+          })
+        );
+
+        socket.send(
+          JSON.stringify({
+            type: "load_chat_history",
+            from: username,
+            to: selectedFriend,
+          })
+        );
+      }
+    }
+  }, [selectedFriend, socket, username]);
+
+  // Updated handleIncomingMessage function with improved reaction handling
+  useEffect(() => {
     const handleIncomingMessage = (event) => {
       const data = JSON.parse(event.data);
 
       if (data.type === "reaction_update") {
         console.log("Received reaction update:", data);
+
+        // Update all chat histories that contain this message
         setChatHistory((prev) => {
-          const updatedMessages = (prev[selectedFriend] || []).map((msg) =>
-            msg._id === data.messageId
-              ? { ...msg, reactions: data.reactions }
-              : msg
-          );
-          console.log("Updated messages:", updatedMessages);
-          return {
-            ...prev,
-            [selectedFriend]: updatedMessages,
+          const newHistory = { ...prev };
+          let hasUpdates = false;
+
+          // Helper function to update message reactions
+          const updateMessageReactions = (messages) => {
+            if (!messages) return messages;
+
+            return messages.map((msg) => {
+              if (msg._id === data.messageId) {
+                // Check if this update is newer than our last recorded update
+                const lastUpdate = messageUpdateTimeRef.current[msg._id] || 0;
+                const currentTime = Date.now();
+
+                if (currentTime > lastUpdate) {
+                  messageUpdateTimeRef.current[msg._id] = currentTime;
+                  hasUpdates = true;
+                  return {
+                    ...msg,
+                    reactions: data.reactions,
+                  };
+                }
+              }
+              return msg;
+            });
           };
+
+          // Update messages in all chats
+          Object.keys(newHistory).forEach((friend) => {
+            const updatedMessages = updateMessageReactions(newHistory[friend]);
+            if (updatedMessages) {
+              newHistory[friend] = updatedMessages;
+            }
+          });
+
+          // Only trigger re-render if we actually made updates
+          return hasUpdates ? newHistory : prev;
         });
       }
 
@@ -72,14 +130,13 @@ export default function Chat({
           (data.from === selectedFriend && data.to === username) ||
           (data.from === username && data.to === selectedFriend);
 
-        // Check if the message ID already exists
         if (isRelevantMessage && !messageIds.current.has(data.id)) {
-          // Add the message ID to the set to track it as processed
           messageIds.current.add(data.id);
 
           const messageWithTimestamp = {
             ...data,
             timestamp: data.timestamp || new Date().toISOString(),
+            reactions: data.reactions || [], // Ensure reactions array exists
           };
 
           setChatHistory((prev) => {
@@ -122,9 +179,16 @@ export default function Chat({
         }));
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
+
+        // Ensure all messages have a reactions array
+        const chatWithReactions = data.chat.map((msg) => ({
+          ...msg,
+          reactions: msg.reactions || [],
+        }));
+
         setChatHistory((prev) => ({
           ...prev,
-          [selectedFriend]: data.chat,
+          [selectedFriend]: chatWithReactions,
         }));
       }
     };
@@ -269,7 +333,9 @@ export default function Chat({
         <div className="space-y-4">
           {chatHistory[selectedFriend]?.map((msg, index) => (
             <motion.div
-              key={`${msg.from}-${msg.to}-${msg.timestamp}-${index}`}
+              key={`${
+                msg._id || `${msg.from}-${msg.to}-${msg.timestamp}-${index}`
+              }`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}

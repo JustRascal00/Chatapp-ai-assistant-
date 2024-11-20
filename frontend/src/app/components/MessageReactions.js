@@ -12,8 +12,9 @@ const commonEmojis = ["👍", "❤️", "😊", "😂", "🎉", "👏", "🙌", 
 const MessageReactions = ({ message, socket, username, selectedFriend }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [localReactions, setLocalReactions] = useState([]);
-  const pendingReactionsRef = useRef(new Set());
+  const pendingReactionsRef = useRef(new Map());
   const messageIdRef = useRef(null);
+  const lastUpdateRef = useRef(null);
 
   // Helper function to safely get reactions
   const getReactions = useCallback((msg) => {
@@ -35,39 +36,81 @@ const MessageReactions = ({ message, socket, username, selectedFriend }) => {
   }, [message, getReactions, getMessageId]);
 
   // Process reaction updates from WebSocket
-  const handleWebSocketMessage = useCallback((event) => {
-    try {
-      const data = JSON.parse(event.data);
+  const handleWebSocketMessage = useCallback(
+    (event) => {
+      try {
+        const data = JSON.parse(event.data);
 
-      if (data.type === "reaction_update" && data.messageId && data.reactions) {
-        // Compare with stored messageId instead of getting it from message prop
-        if (data.messageId === messageIdRef.current) {
-          console.log("Processing reaction update:", {
-            messageId: data.messageId,
-            reactions: data.reactions,
-          });
+        if (
+          data.type === "reaction_update" &&
+          data.messageId &&
+          data.reactions
+        ) {
+          if (data.messageId === messageIdRef.current) {
+            const currentTime = Date.now();
 
-          // Clear any pending reactions for this update
-          pendingReactionsRef.current.clear();
+            // Check if this update is newer than our last local update
+            if (!lastUpdateRef.current || currentTime > lastUpdateRef.current) {
+              console.log("Applying server reaction update:", {
+                messageId: data.messageId,
+                reactions: data.reactions,
+              });
 
-          // Update with server-provided reactions
-          setLocalReactions(data.reactions);
-          console.log("Updated local reactions:", data.reactions);
+              // Clear any pending reactions that were included in this update
+              const pendingReactions = pendingReactionsRef.current;
+              data.reactions.forEach((reaction) => {
+                if (reaction.users.includes(username)) {
+                  pendingReactions.delete(
+                    `${data.messageId}-${reaction.emoji}`
+                  );
+                }
+              });
+
+              setLocalReactions((prevReactions) => {
+                // Merge pending reactions with server update
+                const mergedReactions = [...data.reactions];
+                pendingReactions.forEach((pendingReaction, key) => {
+                  const [messageId, emoji] = key.split("-");
+                  if (messageId === data.messageId) {
+                    const existingIndex = mergedReactions.findIndex(
+                      (r) => r.emoji === emoji
+                    );
+                    if (existingIndex === -1) {
+                      mergedReactions.push({
+                        emoji,
+                        count: 1,
+                        users: [username],
+                      });
+                    } else if (
+                      !mergedReactions[existingIndex].users.includes(username)
+                    ) {
+                      mergedReactions[existingIndex] = {
+                        ...mergedReactions[existingIndex],
+                        count: mergedReactions[existingIndex].count + 1,
+                        users: [
+                          ...mergedReactions[existingIndex].users,
+                          username,
+                        ],
+                      };
+                    }
+                  }
+                });
+                return mergedReactions;
+              });
+            }
+          }
         }
+      } catch (error) {
+        console.error("Error processing reaction update:", error);
       }
-    } catch (error) {
-      console.error("Error processing reaction update:", error);
-    }
-  }, []); // Ensure dependencies are correct
+    },
+    [username]
+  );
 
   // WebSocket event listener setup
   useEffect(() => {
     if (!socket) return;
-
-    // Add event listener
     socket.addEventListener("message", handleWebSocketMessage);
-
-    // Cleanup
     return () => {
       socket.removeEventListener("message", handleWebSocketMessage);
     };
@@ -96,9 +139,18 @@ const MessageReactions = ({ message, socket, username, selectedFriend }) => {
       }
 
       try {
-        // Create unique key for this reaction
-        const reactionKey = `${messageId}-${emoji}-${username}-${Date.now()}`;
-        pendingReactionsRef.current.add(reactionKey);
+        // Create reaction key
+        const reactionKey = `${messageId}-${emoji}`;
+        const currentTime = Date.now();
+
+        // Store pending reaction
+        pendingReactionsRef.current.set(reactionKey, {
+          timestamp: currentTime,
+          emoji,
+        });
+
+        // Update last update timestamp
+        lastUpdateRef.current = currentTime;
 
         // Prepare reaction data
         const reactionData = {
@@ -108,56 +160,42 @@ const MessageReactions = ({ message, socket, username, selectedFriend }) => {
           emoji,
         };
 
-        // Send to server first
+        // Send to server
         console.log("Sending reaction:", reactionData);
         socket.send(JSON.stringify(reactionData));
 
-        // Optimistically update local state
+        // Optimistic update
         setLocalReactions((prevReactions) => {
-          // Check if user already reacted with this emoji
-          const existingReaction = prevReactions.find(
-            (r) => r.emoji === emoji && r.users?.includes(username)
-          );
-
-          if (existingReaction) {
-            return prevReactions;
-          }
-
-          // Find if emoji already exists but user hasn't reacted
-          const existingEmojiReaction = prevReactions.find(
+          const updatedReactions = [...prevReactions];
+          const existingIndex = updatedReactions.findIndex(
             (r) => r.emoji === emoji
           );
 
-          if (existingEmojiReaction) {
-            return prevReactions.map((r) => {
-              if (r.emoji === emoji) {
-                return {
-                  ...r,
-                  count: (r.count || 1) + 1,
-                  users: [...(r.users || []), username],
-                };
-              }
-              return r;
-            });
-          }
-
-          // Add new reaction
-          return [
-            ...prevReactions,
-            {
+          if (existingIndex !== -1) {
+            if (!updatedReactions[existingIndex].users.includes(username)) {
+              updatedReactions[existingIndex] = {
+                ...updatedReactions[existingIndex],
+                count: updatedReactions[existingIndex].count + 1,
+                users: [...updatedReactions[existingIndex].users, username],
+              };
+            }
+          } else {
+            updatedReactions.push({
               emoji,
               count: 1,
               users: [username],
-            },
-          ];
+            });
+          }
+
+          return updatedReactions;
         });
 
-        // Set timeout to revert if no server response
+        // Cleanup timeout
         setTimeout(() => {
-          if (pendingReactionsRef.current.has(reactionKey)) {
+          const pendingReaction = pendingReactionsRef.current.get(reactionKey);
+          if (pendingReaction && pendingReaction.timestamp === currentTime) {
+            console.warn("Reaction timeout - no server response");
             pendingReactionsRef.current.delete(reactionKey);
-            console.log("Reaction timeout - no server response");
-            // Could add logic here to revert the optimistic update
           }
         }, 5000);
 
@@ -169,7 +207,6 @@ const MessageReactions = ({ message, socket, username, selectedFriend }) => {
     [message, getMessageId, canUserReact, socket, username]
   );
 
-  // Render nothing if message is invalid
   if (!message || !getMessageId(message)) return null;
 
   return (
