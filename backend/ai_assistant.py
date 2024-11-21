@@ -9,7 +9,7 @@ class AIAssistant:
         response = self.model.generate_content(message)
         return response.text
 
-    async def generate_smart_replies(self, context, num_suggestions=3):
+    async def generate_smart_replies(self, context, num_suggestions=2):
         """
         Generate smart reply suggestions based on chat context.
         
@@ -23,7 +23,7 @@ class AIAssistant:
         try:
             # Extract last few messages from context
             last_messages = context.get('messages', [])
-            recent_context = " ".join([msg['content'] for msg in last_messages[-3:]])
+            recent_context = " ".join([msg['content'] for msg in last_messages[-2:]])
             
             # Prompt for generating smart replies
             prompt = f"""Generate {num_suggestions} concise, appropriate, and context-aware reply suggestions based on this conversation context:
@@ -62,8 +62,7 @@ Format your response as a JSON array of strings."""
                 # If parsing fails, generate manual suggestions
                 fallback_suggestions = [
                     "Got it, thanks!",
-                    "Can you tell me more?",
-                    "Sounds good."
+                    "Can you explain more?"
                 ]
                 return fallback_suggestions
 

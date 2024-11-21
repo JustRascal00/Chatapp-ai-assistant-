@@ -8,9 +8,16 @@ const SmartReplySuggestions = ({
   chatHistory,
 }) => {
   const [smartReplies, setSmartReplies] = useState([]);
+  const [lastRequestTime, setLastRequestTime] = useState(0);
 
   useEffect(() => {
-    if (socket && socket.readyState === WebSocket.OPEN && selectedFriend) {
+    const currentTime = Date.now();
+    if (
+      socket &&
+      socket.readyState === WebSocket.OPEN &&
+      selectedFriend &&
+      currentTime - lastRequestTime > 2000 // 2 second cooldown
+    ) {
       // Request smart reply suggestions
       socket.send(
         JSON.stringify({
@@ -18,10 +25,11 @@ const SmartReplySuggestions = ({
           from: username,
           to: selectedFriend,
           context: {
-            messages: chatHistory[selectedFriend]?.slice(-3) || [],
+            messages: chatHistory[selectedFriend]?.slice(-2) || [],
           },
         })
       );
+      setLastRequestTime(currentTime);
     }
   }, [selectedFriend, chatHistory, username, socket]);
 
