@@ -5,6 +5,7 @@ import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import MessageReactions from "./MessageReactions";
+import SmartReplySuggestions from "./SmartReplySuggestions";
 
 export default function Chat({
   socket,
@@ -387,6 +388,12 @@ export default function Chat({
           </Button>
         </div>
       </form>
+      <SmartReplySuggestions
+        socket={socket}
+        username={username}
+        selectedFriend={selectedFriend}
+        chatHistory={chatHistory}
+      />
     </div>
   );
 }

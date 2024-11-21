@@ -203,8 +203,29 @@ async def handle_client(websocket, path):
                         }
                         
                         await broadcast_to_user(data['to'], message_data)
+                elif data['type'] == 'get_smart_replies':
+                    try:
+                        # Extract context from the request
+                        from_user = data['from']
+                        to_user = data['to']
+                        context = data.get('context', {})
 
-                elif data['type'] == 'get_friends':
+                        # Generate smart replies using AI assistant
+                        smart_replies = await ai_assistant.generate_smart_replies(context)
+
+                        # Send smart reply suggestions back to the client
+                        await websocket.send(json.dumps({
+                            'type': 'smart_replies',
+                            'suggestions': smart_replies
+                        }))
+
+                    except Exception as e:
+                        logger.error(f"Error generating smart replies: {e}")
+                        await websocket.send(json.dumps({
+                            'type': 'smart_replies',
+                            'suggestions': []
+                        }))
+                elif data['type'] == 'get_friends': 
                     friends = await db.get_friends(data['username'])
                     friends.append("AI Assistant")
                     await websocket.send(json.dumps({
