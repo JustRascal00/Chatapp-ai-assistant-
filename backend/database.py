@@ -1,5 +1,6 @@
 from bson import ObjectId
 from pymongo import MongoClient
+import certifi
 from datetime import datetime
 import logging
 from cachetools import TTLCache
@@ -12,7 +13,8 @@ class Database:
         if not uri:
             raise ValueError("MongoDB URI cannot be empty")
             
-        self.client = MongoClient(uri)
+        # Use system CA bundle from certifi to avoid TLS handshake issues on hosts like Render
+        self.client = MongoClient(uri, tlsCAFile=certifi.where())
         self.db = self.client['messenger_app']
         self.users = self.db['users']
         self.messages = self.db['messages']

@@ -3,3 +3,5 @@ pymongo
 python-dotenv
 google-generativeai
 cachetools
+certifi
+dnspython
