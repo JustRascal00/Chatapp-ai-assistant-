@@ -5,3 +5,4 @@ google-generativeai
 cachetools
 certifi
 dnspython
+aiohttp

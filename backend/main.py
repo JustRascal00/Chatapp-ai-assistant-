@@ -1,9 +1,8 @@
 import asyncio
 import json
-import websockets
 import os
 import logging
-from http import HTTPStatus
+from aiohttp import web, WSMsgType
 from dotenv import load_dotenv
 from database import Database
 from ai_assistant import AIAssistant
@@ -41,7 +40,7 @@ async def broadcast_to_user(username, message):
         return False
     if username in connected_clients:
         try:
-            await connected_clients[username].send(json.dumps(message))
+            await connected_clients[username].send_str(json.dumps(message))
             logger.info(f"Successfully sent message to {username}")
             return True
         except Exception as e:
@@ -69,11 +68,11 @@ async def handle_message_to_ai(websocket, user_message_data):
             'to': user_message_data['from'],
             'content': ai_response
         }
-        await websocket.send(json.dumps(ai_message))
+        await websocket.send_str(json.dumps(ai_message))
 
     except Exception as e:
         logger.error(f"Error in AI message handling: {e}")
-        await websocket.send(json.dumps({
+        await websocket.send_str(json.dumps({
             'type': 'error',
             'message': 'Failed to get AI response. Please try again.'
         }))
@@ -89,7 +88,7 @@ async def handle_reaction(websocket, data):
             
             if not db.is_valid_object_id(data['messageId']):
                 logger.error(f"Invalid message ID format: {data['messageId']}")
-                await websocket.send(json.dumps({
+                await websocket.send_str(json.dumps({
                     'type': 'error',
                     'message': 'Invalid message ID format'
                 }))
@@ -142,33 +141,20 @@ async def handle_reaction(websocket, data):
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
             else:
-                await websocket.send(json.dumps({
+                await websocket.send_str(json.dumps({
                     'type': 'error',
                     'message': 'Failed to add reaction after multiple attempts'
                 }))
-
-def process_health_check(path, request_headers):
-    """Return 200 OK for non-WebSocket requests so Render health checks pass."""
-    # Respond OK for root or any simple probe
-    if path == '/' or path.startswith('/health'):
-        return (
-            HTTPStatus.OK,
-            [('Content-Type', 'text/plain')],
-            b'OK'
-        )
-    # For other paths, return 404 to be explicit
-    return (
-        HTTPStatus.NOT_FOUND,
-        [('Content-Type', 'text/plain')],
-        b'Not Found'
-    )
-
-async def handle_client(websocket, path):
+async def ws_handler(request):
+    websocket = web.WebSocketResponse(heartbeat=30)
+    await websocket.prepare(request)
     client_username = None
     try:
-        async for message in websocket:
+        async for msg in websocket:
             try:
-                data = json.loads(message)
+                if msg.type != WSMsgType.TEXT:
+                    continue
+                data = json.loads(msg.data)
                 
                 if data['type'] == 'register':
                     client_username = data['username']
@@ -180,7 +166,7 @@ async def handle_client(websocket, path):
                     friends.append("AI Assistant")
                     requests = await db.get_friend_requests(client_username)
 
-                    await websocket.send(json.dumps({
+                    await websocket.send_str(json.dumps({
                         'type': 'initial_data',
                         'friends': friends,
                         'friend_requests': requests
@@ -234,21 +220,21 @@ async def handle_client(websocket, path):
                         smart_replies = await ai_assistant.generate_smart_replies(context)
 
                         # Send smart reply suggestions back to the client
-                        await websocket.send(json.dumps({
+                        await websocket.send_str(json.dumps({
                             'type': 'smart_replies',
                             'suggestions': smart_replies
                         }))
 
                     except Exception as e:
                         logger.error(f"Error generating smart replies: {e}")
-                        await websocket.send(json.dumps({
+                        await websocket.send_str(json.dumps({
                             'type': 'smart_replies',
                             'suggestions': []
                         }))
                 elif data['type'] == 'get_friends': 
                     friends = await db.get_friends(data['username'])
                     friends.append("AI Assistant")
-                    await websocket.send(json.dumps({
+                    await websocket.send_str(json.dumps({
                         'type': 'friends_list',
                         'friends': friends
                     }))
@@ -258,7 +244,7 @@ async def handle_client(websocket, path):
 
                 elif data['type'] == 'get_friend_requests':
                     requests = await db.get_friend_requests(data['username'])
-                    await websocket.send(json.dumps({
+                    await websocket.send_str(json.dumps({
                         'type': 'friend_requests',
                         'requests': requests
                     }))
@@ -282,7 +268,7 @@ async def handle_client(websocket, path):
                         for msg in messages
                     ]
                     
-                    await websocket.send(json.dumps({
+                    await websocket.send_str(json.dumps({
                         'type': 'chat_history',
                         'chat': formatted_messages
                     }))
@@ -315,7 +301,7 @@ async def handle_client(websocket, path):
             except json.JSONDecodeError:
                 logger.error("Invalid JSON received") 
 
-    except websockets.exceptions.ConnectionClosed:
+    except Exception:
         logger.info("Client connection closed")
     except Exception as e:
         logger.error(f"Error in handle_client: {e}")
@@ -323,6 +309,11 @@ async def handle_client(websocket, path):
         if client_username and client_username in connected_clients:
             del connected_clients[client_username]
             logger.info(f"User {client_username} disconnected")
+
+    return websocket
+
+async def health_handler(request):
+    return web.Response(text='OK')
 
 async def main():
     try:
@@ -334,14 +325,19 @@ async def main():
 
     port = int(os.getenv("PORT", "8765"))
     host = "0.0.0.0"
-    server = await websockets.serve(
-        handle_client,
-        host,
-        port,
-        process_request=process_health_check
-    )
-    logger.info(f"WebSocket server started on ws://{host}:{port}")
-    await server.wait_closed()
+
+    app = web.Application()
+    app.router.add_get('/', health_handler)
+    app.router.add_get('/health', health_handler)
+    app.router.add_get('/ws', ws_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+    logger.info(f"HTTP server started on http://{host}:{port} (WebSocket at /ws)")
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
