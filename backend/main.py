@@ -315,8 +315,10 @@ async def main():
         logger.error(f"Error connecting to MongoDB: {e}")
         return
 
-    server = await websockets.serve(handle_client, "localhost", 8765)
-    logger.info("WebSocket server started on ws://localhost:8765")
+    port = int(os.getenv("PORT", "8765"))
+    host = "0.0.0.0"
+    server = await websockets.serve(handle_client, host, port)
+    logger.info(f"WebSocket server started on ws://{host}:{port}")
     await server.wait_closed()
 
 if __name__ == "__main__":

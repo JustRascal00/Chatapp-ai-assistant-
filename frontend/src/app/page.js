@@ -24,7 +24,8 @@ export default function Component() {
     let ws;
     if (isLoggedIn) {
       setIsLoading(true);
-      ws = new WebSocket("ws://localhost:8765");
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8765";
+      ws = new WebSocket(wsUrl);
       setSocket(ws);
 
       ws.onopen = () => {
