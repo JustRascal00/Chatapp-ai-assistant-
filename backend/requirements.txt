@@ -2,3 +2,4 @@ websockets
 pymongo
 python-dotenv
 google-generativeai
+cachetools

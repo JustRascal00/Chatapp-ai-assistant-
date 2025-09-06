@@ -50,33 +50,6 @@ export default function Chat({
     }
   }, [selectedFriend, socket, username]);
 
-  useEffect(() => {
-    if (selectedFriend) {
-      setChatHistory((prev) => ({
-        ...prev,
-        [selectedFriend]: prev[selectedFriend] || [],
-      }));
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({
-            type: "mark_messages_read",
-            reader: username,
-            sender: selectedFriend,
-          })
-        );
-
-        socket.send(
-          JSON.stringify({
-            type: "load_chat_history",
-            from: username,
-            to: selectedFriend,
-          })
-        );
-      }
-    }
-  }, [selectedFriend, socket, username]);
-
   // Updated handleIncomingMessage function with improved reaction handling
   useEffect(() => {
     const handleIncomingMessage = (event) => {
@@ -127,12 +100,16 @@ export default function Chat({
       }
 
       if (data.type === "message") {
+        const getMessageKey = (m) =>
+          m._id ||
+          `${m.from}-${m.to}-${m.timestamp}-${(m.content || "").slice(0, 20)}`;
         const isRelevantMessage =
           (data.from === selectedFriend && data.to === username) ||
           (data.from === username && data.to === selectedFriend);
 
-        if (isRelevantMessage && !messageIds.current.has(data.id)) {
-          messageIds.current.add(data.id);
+        const key = getMessageKey(data);
+        if (isRelevantMessage && !messageIds.current.has(key)) {
+          messageIds.current.add(key);
 
           const messageWithTimestamp = {
             ...data,
@@ -180,6 +157,16 @@ export default function Chat({
         }));
       } else if (data.type === "chat_history" && data.chat) {
         messageIds.current.clear();
+        // seed the set to prevent duplicates when live updates arrive
+        data.chat.forEach((m) => {
+          const k =
+            m._id ||
+            `${m.from}-${m.to}-${m.timestamp}-${(m.content || "").slice(
+              0,
+              20
+            )}`;
+          messageIds.current.add(k);
+        });
 
         // Ensure all messages have a reactions array
         const chatWithReactions = data.chat.map((msg) => ({

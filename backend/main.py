@@ -13,7 +13,7 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Initialize database and AI assistant
 mongodb_uri = os.getenv('MONGODB_URI')
@@ -35,6 +35,9 @@ def convert_object_ids_and_datetimes_to_strings(data):
     return data
 
 async def broadcast_to_user(username, message):
+    # Skip broadcasting to AI assistant since it's not a websocket client
+    if username == "AI Assistant":
+        return False
     if username in connected_clients:
         try:
             await connected_clients[username].send(json.dumps(message))

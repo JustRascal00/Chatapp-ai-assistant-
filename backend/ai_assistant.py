@@ -3,11 +3,21 @@ import google.generativeai as genai
 class AIAssistant:
     def __init__(self, api_key):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        # Use a current, supported model
+        # gemini-1.5-flash is fast and suitable for chat and short generations
+        try:
+            self.model = genai.GenerativeModel('gemini-1.5-flash')
+        except Exception:
+            # Fallback in case of older API/model availability
+            self.model = genai.GenerativeModel('gemini-1.5-pro')
 
     async def get_response(self, message):
-        response = self.model.generate_content(message)
-        return response.text
+        try:
+            response = self.model.generate_content(message)
+            return getattr(response, 'text', '')
+        except Exception as e:
+            # Fallback response on failure
+            return "Sorry, I couldn't generate a response right now."
 
     async def generate_smart_replies(self, context, num_suggestions=2):
         """

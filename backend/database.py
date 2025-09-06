@@ -293,11 +293,8 @@ class Database:
                 logger.info(f"User message saved with ID: {result.inserted_id}")
                 collection = self.messages
             
-            # Add the message to the cache
-            self.message_cache[str(result.inserted_id)] = message_doc
-            
-            # Simulate a delay to ensure the message is saved before reactions are added
-            await asyncio.sleep(0.5)
+            # Add the message to the cache with _id for quick reads and dedupe
+            self.message_cache[str(result.inserted_id)] = {**message_doc, '_id': result.inserted_id}
             
             return str(result.inserted_id)
         except Exception as e:
