@@ -3,6 +3,7 @@ import json
 import websockets
 import os
 import logging
+from http import HTTPStatus
 from dotenv import load_dotenv
 from database import Database
 from ai_assistant import AIAssistant
@@ -145,6 +146,22 @@ async def handle_reaction(websocket, data):
                     'type': 'error',
                     'message': 'Failed to add reaction after multiple attempts'
                 }))
+
+def process_health_check(path, request_headers):
+    """Return 200 OK for non-WebSocket requests so Render health checks pass."""
+    # Respond OK for root or any simple probe
+    if path == '/' or path.startswith('/health'):
+        return (
+            HTTPStatus.OK,
+            [('Content-Type', 'text/plain')],
+            b'OK'
+        )
+    # For other paths, return 404 to be explicit
+    return (
+        HTTPStatus.NOT_FOUND,
+        [('Content-Type', 'text/plain')],
+        b'Not Found'
+    )
 
 async def handle_client(websocket, path):
     client_username = None
@@ -317,7 +334,12 @@ async def main():
 
     port = int(os.getenv("PORT", "8765"))
     host = "0.0.0.0"
-    server = await websockets.serve(handle_client, host, port)
+    server = await websockets.serve(
+        handle_client,
+        host,
+        port,
+        process_request=process_health_check
+    )
     logger.info(f"WebSocket server started on ws://{host}:{port}")
     await server.wait_closed()
 
