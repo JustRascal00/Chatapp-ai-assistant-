@@ -207,7 +207,7 @@ async def ws_handler(request):
                             'to': data['to'],
                             'content': data['content']
                         }
-                        
+                        # Broadcast to recipient; sender updates UI optimistically
                         await broadcast_to_user(data['to'], message_data)
                 elif data['type'] == 'get_smart_replies':
                     try:

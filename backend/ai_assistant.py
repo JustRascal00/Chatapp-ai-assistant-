@@ -1,15 +1,36 @@
 import google.generativeai as genai
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AIAssistant:
     def __init__(self, api_key):
-        genai.configure(api_key=api_key)
-        # Use a current, supported model
-        # gemini-1.5-flash is fast and suitable for chat and short generations
+        # Prefer v1 REST; fall back if this client version lacks api_version support
         try:
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            genai.configure(
+                api_key=api_key,
+                client_options={"api_endpoint": "https://generativelanguage.googleapis.com", "api_version": "v1"},
+                transport="rest",
+            )
         except Exception:
-            # Fallback in case of older API/model availability
-            self.model = genai.GenerativeModel('gemini-1.5-pro')
+            genai.configure(
+                api_key=api_key,
+                client_options={"api_endpoint": "https://generativelanguage.googleapis.com"},
+                transport="rest",
+            )
+        # Prefer newer models with graceful fallbacks
+        for model_name in [
+            'gemini-2.5-flash',
+            'models/gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'models/gemini-2.0-flash',
+        ]:
+            try:
+                self.model = genai.GenerativeModel(model_name)
+                logger.info(f"Using GenerativeModel: {model_name}")
+                break
+            except Exception:
+                continue
 
     async def get_response(self, message):
         try:

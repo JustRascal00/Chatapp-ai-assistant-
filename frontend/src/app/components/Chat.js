@@ -125,7 +125,9 @@ export default function Chat({
             };
           });
 
-          if (data.from !== username) {
+          // Only bump unread when message comes from someone other than
+          // the logged-in user AND it's not the currently open chat
+          if (data.from !== username && data.from !== selectedFriend) {
             onMessageReceived(data.from);
           }
 
@@ -174,10 +176,21 @@ export default function Chat({
           reactions: msg.reactions || [],
         }));
 
-        setChatHistory((prev) => ({
-          ...prev,
-          [selectedFriend]: chatWithReactions,
-        }));
+        // Merge with any locally queued messages not present in server list
+        setChatHistory((prev) => {
+          const existing = prev[selectedFriend] || [];
+          const getKey = (m) =>
+            m._id ||
+            `${m.from}-${m.to}-${m.timestamp}-${(m.content || "").slice(0, 20)}`;
+          const serverKeys = new Set(chatWithReactions.map(getKey));
+          const pendingNotOnServer = existing.filter(
+            (m) => !serverKeys.has(getKey(m))
+          );
+          return {
+            ...prev,
+            [selectedFriend]: [...pendingNotOnServer, ...chatWithReactions],
+          };
+        });
       }
     };
 
@@ -281,6 +294,25 @@ export default function Chat({
     }
   };
 
+  // Allow SmartReplySuggestions to add a local message instantly
+  const handleQuickReplySend = (reply) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const timestamp = new Date().toISOString();
+    const messageData = {
+      type: "message",
+      from: username,
+      to: selectedFriend,
+      content: reply,
+      timestamp,
+      read: false,
+    };
+    setChatHistory((prev) => ({
+      ...prev,
+      [selectedFriend]: [...(prev[selectedFriend] || []), messageData],
+    }));
+    socket.send(JSON.stringify(messageData));
+  };
+
   const getReadStatus = (message) => {
     if (message.from !== username) return null;
 
@@ -380,6 +412,7 @@ export default function Chat({
         username={username}
         selectedFriend={selectedFriend}
         chatHistory={chatHistory}
+        onSend={handleQuickReplySend}
       />
     </div>
   );

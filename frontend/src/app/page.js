@@ -24,7 +24,8 @@ export default function Component() {
     let ws;
     if (isLoggedIn) {
       setIsLoading(true);
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8765";
+      const raw = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8765/ws";
+      const wsUrl = raw.endsWith("/ws") ? raw : `${raw.replace(/\/$/, "")}/ws`;
       ws = new WebSocket(wsUrl);
       setSocket(ws);
 
@@ -33,12 +34,8 @@ export default function Component() {
         setIsLoading(false);
       };
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === "message") {
-          handleMessageReceived(data.from);
-        }
-      };
+      // Let Chat component handle unread counts to avoid double-increment
+      ws.onmessage = () => {};
 
       ws.onclose = () => {
         console.log("WebSocket closed. Attempting to reconnect...");
@@ -46,7 +43,11 @@ export default function Component() {
       };
 
       ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
+        try {
+          console.error("WebSocket error:", error?.message || error);
+        } catch (e) {
+          console.error("WebSocket error");
+        }
       };
 
       return () => {

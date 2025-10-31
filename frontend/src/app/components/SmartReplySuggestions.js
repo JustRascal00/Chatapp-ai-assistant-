@@ -6,6 +6,7 @@ const SmartReplySuggestions = ({
   username,
   selectedFriend,
   chatHistory,
+  onSend,
 }) => {
   const [smartReplies, setSmartReplies] = useState([]);
   const [lastRequestTime, setLastRequestTime] = useState(0);
@@ -53,16 +54,9 @@ const SmartReplySuggestions = ({
   }, [socket]);
 
   const sendQuickReply = (reply) => {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(
-        JSON.stringify({
-          type: "message",
-          from: username,
-          to: selectedFriend,
-          content: reply,
-        })
-      );
-    }
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    // Optimistically add to chat then send
+    if (onSend) onSend(reply);
   };
 
   if (!smartReplies.length) return null;
